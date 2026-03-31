@@ -1,0 +1,166 @@
+diff --git a/PopupWindow.xaml b/PopupWindow.xaml
+index 489bdfa..e384852 100644
+--- a/PopupWindow.xaml
++++ b/PopupWindow.xaml
+@@ -125,26 +125,17 @@
+             <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource ThemeSeparator}"/>
+ 
+             <!-- Search Bar -->
+-            <Border Grid.Row="1" Margin="8,6,8,4" Padding="10,6"
+-                    Background="{DynamicResource SurfaceBrush}" CornerRadius="8">
++            <Border x:Name="SearchBarPanel" Grid.Row="1" Visibility="Collapsed"
++                    Margin="8,8,8,4" Padding="10,8" Background="{DynamicResource SurfaceBrush}" CornerRadius="8">
+                 <Grid>
+                     <Grid.ColumnDefinitions>
+                         <ColumnDefinition Width="Auto"/>
+                         <ColumnDefinition Width="*"/>
+                         <ColumnDefinition Width="Auto"/>
+                     </Grid.ColumnDefinitions>
+-                    <TextBlock Text="馃攳" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"
+-                               Foreground="{DynamicResource MutedText}"/>
+-                    <TextBox x:Name="SearchBox" Grid.Column="1"
+-                             FontSize="13" VerticalAlignment="Center"
+-                             Background="Transparent" BorderThickness="0"
+-                             Foreground="{DynamicResource PrimaryText}"
+-                             CaretBrush="{DynamicResource PrimaryText}"
+-                             Padding="0" Margin="0"
+-                             TextChanged="SearchBox_TextChanged"/>
+-                    <TextBlock x:Name="SearchPlaceholder" Grid.Column="1" Text="鎼滅储鈥?
+-                               FontSize="13" VerticalAlignment="Center"
+-                               Foreground="{DynamicResource MutedText}" IsHitTestVisible="False"/>
++                    <TextBlock Text="馃攳" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
++                    <TextBlock x:Name="SearchTextBlock" Grid.Column="1" Foreground="{DynamicResource PrimaryText}"
++                               FontSize="13" VerticalAlignment="Center"/>
+                     <TextBlock x:Name="SearchCountText" Grid.Column="2" Foreground="{DynamicResource SecondaryText}"
+                                FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                 </Grid>
+diff --git a/PopupWindow.xaml.cs b/PopupWindow.xaml.cs
+index 9388b24..4d6aa0e 100644
+--- a/PopupWindow.xaml.cs
++++ b/PopupWindow.xaml.cs
+@@ -34,6 +34,7 @@ public partial class PopupWindow : Window
+     private Win32.WinEventDelegate? _winEventProc;
+     private bool _isSettingClipboard;
+     private bool _isPopupVisible;
++    private string _searchText = "";
+     private EntryType? _typeFilter;
+     private bool _quickPhraseOnly;
+     private ClipboardEntry? _contextEntry;
+@@ -397,7 +398,7 @@ public partial class PopupWindow : Window
+     {
+         _displayItems.Clear();
+         _firstVisibleIndex = 0;
+-        var query = SearchBox.Text.Trim();
++        var query = _searchText.Trim();
+ 
+         IEnumerable<ClipboardEntry> items = _allItems;
+ 
+@@ -411,7 +412,7 @@ public partial class PopupWindow : Window
+             items = items.Where(i => i.SearchableText.Contains(query, StringComparison.OrdinalIgnoreCase));
+ 
+         var sorted = items
+-            .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(query))
++            .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(_searchText))
+             .ThenByDescending(i => i.CopiedAt);
+ 
+         int idx = 1;
+@@ -428,16 +429,12 @@ public partial class PopupWindow : Window
+ 
+     private void UpdateSearchUI()
+     {
+-        var hasSearch = SearchBox.Text.Length > 0;
+-        SearchPlaceholder.Visibility = hasSearch ? Visibility.Collapsed : Visibility.Visible;
++        var hasSearch = _searchText.Length > 0;
++        SearchBarPanel.Visibility = hasSearch ? Visibility.Visible : Visibility.Collapsed;
++        SearchTextBlock.Text = _searchText;
+         SearchCountText.Text = hasSearch ? $"{_displayItems.Count} 鏉＄粨鏋? : "";
+     }
+ 
+-    private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+-    {
+-        RefreshFilter();
+-    }
+-
+     private void UpdateEmptyState()
+     {
+         UpdateSearchUI();
+@@ -445,7 +442,7 @@ public partial class PopupWindow : Window
+         EmptyHint.Visibility = hasItems ? Visibility.Collapsed : Visibility.Visible;
+         ItemsList.Visibility = hasItems ? Visibility.Visible : Visibility.Collapsed;
+ 
+-        if (SearchBox.Text.Length > 0 && !hasItems)
++        if (_searchText.Length > 0 && !hasItems)
+         {
+             EmptyIcon.Text = "馃攳"; EmptyText.Text = "鏃犲尮閰嶇粨鏋?; EmptySubText.Text = "灏濊瘯鍏朵粬鍏抽敭璇?;
+         }
+@@ -471,7 +468,7 @@ public partial class PopupWindow : Window
+     private void ShowPopup()
+     {
+         _targetWindow = Win32.GetForegroundWindow();
+-        SearchBox.Text = "";
++        _searchText = "";
+         _typeFilter = null;
+         _quickPhraseOnly = false;
+         TypeFilterText.Text = "鍏ㄩ儴";
+@@ -499,10 +496,6 @@ public partial class PopupWindow : Window
+         if (_displayItems.Count > 0)
+             ItemsList.SelectedIndex = 0;
+ 
+-        Activate();
+-        SearchBox.Focus();
+-        Keyboard.Focus(SearchBox);
+-
+         InstallKeyboardHook();
+         InstallMouseHook();
+         InstallForegroundWatcher();
+@@ -831,16 +824,28 @@ public partial class PopupWindow : Window
+                 case Win32.VK_ESCAPE:
+                     Dispatcher.BeginInvoke(() =>
+                     {
+-                        if (SearchBox.Text.Length > 0) { SearchBox.Text = ""; }
++                        if (_searchText.Length > 0) { _searchText = ""; RefreshFilter(); }
+                         else HidePopup();
+                     });
+                     return (IntPtr)1;
++                case Win32.VK_BACK:
++                    Dispatcher.BeginInvoke(() =>
++                    {
++                        if (_searchText.Length > 0) { _searchText = _searchText[..^1]; RefreshFilter(); }
++                    });
++                    return (IntPtr)1;
+                 case 0x09: // Tab 鈫?cycle type filter
+                     Dispatcher.BeginInvoke(CycleTypeFilter);
+                     return (IntPtr)1;
+             }
+ 
+-            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
++            var ch = VkToChar(kb.vkCode, kb.scanCode);
++            if (ch.HasValue)
++            {
++                Dispatcher.BeginInvoke(() => { _searchText += ch.Value; RefreshFilter(); });
++            }
++
++            return (IntPtr)1;
+         }
+ 
+         return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+@@ -891,6 +896,19 @@ public partial class PopupWindow : Window
+         AddHint("Tab", "绛涢€?);
+     }
+ 
++    private static char? VkToChar(uint vkCode, uint scanCode)
++    {
++        var keyState = new byte[256];
++        if ((Win32.GetAsyncKeyState(0x10) & 0x8000) != 0) { keyState[0x10] = 0x80; keyState[0xA0] = 0x80; }
++        if ((Win32.GetKeyState(0x14) & 0x0001) != 0) keyState[0x14] = 0x01;
++
++        var sb = new StringBuilder(4);
++        int result = Win32.ToUnicode(vkCode, scanCode, keyState, sb, sb.Capacity, 0);
++        if (result < 0) Win32.ToUnicode(vkCode, scanCode, keyState, sb, sb.Capacity, 0);
++        if (result == 1 && !char.IsControl(sb[0])) return sb[0];
++        return null;
++    }
++
+     private void MoveSelection(int delta)
+     {
+         if (_displayItems.Count == 0) return;

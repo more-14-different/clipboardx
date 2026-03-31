@@ -34,6 +34,7 @@ public partial class PopupWindow : Window
     private Win32.WinEventDelegate? _winEventProc;
     private bool _isSettingClipboard;
     private bool _isPopupVisible;
+    private string _searchText = "";
     private EntryType? _typeFilter;
     private bool _quickPhraseOnly;
     private ClipboardEntry? _contextEntry;
@@ -397,7 +398,7 @@ public partial class PopupWindow : Window
     {
         _displayItems.Clear();
         _firstVisibleIndex = 0;
-        var query = SearchBox.Text.Trim();
+        var query = _searchText.Trim();
 
         IEnumerable<ClipboardEntry> items = _allItems;
 
@@ -411,7 +412,7 @@ public partial class PopupWindow : Window
             items = items.Where(i => i.SearchableText.Contains(query, StringComparison.OrdinalIgnoreCase));
 
         var sorted = items
-            .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(query))
+            .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(_searchText))
             .ThenByDescending(i => i.CopiedAt);
 
         int idx = 1;
@@ -428,14 +429,10 @@ public partial class PopupWindow : Window
 
     private void UpdateSearchUI()
     {
-        var hasSearch = SearchBox.Text.Length > 0;
-        SearchPlaceholder.Visibility = hasSearch ? Visibility.Collapsed : Visibility.Visible;
+        var hasSearch = _searchText.Length > 0;
+        SearchBarPanel.Visibility = hasSearch ? Visibility.Visible : Visibility.Collapsed;
+        SearchTextBlock.Text = _searchText;
         SearchCountText.Text = hasSearch ? $"{_displayItems.Count} 条结果" : "";
-    }
-
-    private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-    {
-        RefreshFilter();
     }
 
     private void UpdateEmptyState()
@@ -445,7 +442,7 @@ public partial class PopupWindow : Window
         EmptyHint.Visibility = hasItems ? Visibility.Collapsed : Visibility.Visible;
         ItemsList.Visibility = hasItems ? Visibility.Visible : Visibility.Collapsed;
 
-        if (SearchBox.Text.Length > 0 && !hasItems)
+        if (_searchText.Length > 0 && !hasItems)
         {
             EmptyIcon.Text = "🔍"; EmptyText.Text = "无匹配结果"; EmptySubText.Text = "尝试其他关键词";
         }
@@ -471,7 +468,7 @@ public partial class PopupWindow : Window
     private void ShowPopup()
     {
         _targetWindow = Win32.GetForegroundWindow();
-        SearchBox.Text = "";
+        _searchText = "";
         _typeFilter = null;
         _quickPhraseOnly = false;
         TypeFilterText.Text = "全部";
@@ -498,10 +495,6 @@ public partial class PopupWindow : Window
 
         if (_displayItems.Count > 0)
             ItemsList.SelectedIndex = 0;
-
-        Win32.SetForegroundWindow(_hwnd);
-        Win32.SetFocus(_hwnd);
-        Keyboard.Focus(SearchBox);
 
         InstallKeyboardHook();
         InstallMouseHook();
@@ -831,8 +824,14 @@ public partial class PopupWindow : Window
                 case Win32.VK_ESCAPE:
                     Dispatcher.BeginInvoke(() =>
                     {
-                        if (SearchBox.Text.Length > 0) { SearchBox.Text = ""; }
+                        if (_searchText.Length > 0) { _searchText = ""; RefreshFilter(); }
                         else HidePopup();
+                    });
+                    return (IntPtr)1;
+                case Win32.VK_BACK:
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_searchText.Length > 0) { _searchText = _searchText[..^1]; RefreshFilter(); }
                     });
                     return (IntPtr)1;
                 case 0x09: // Tab → cycle type filter
@@ -840,7 +839,13 @@ public partial class PopupWindow : Window
                     return (IntPtr)1;
             }
 
-            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            var ch = VkToChar(kb.vkCode, kb.scanCode);
+            if (ch.HasValue)
+            {
+                Dispatcher.BeginInvoke(() => { _searchText += ch.Value; RefreshFilter(); });
+            }
+
+            return (IntPtr)1;
         }
 
         return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
@@ -889,6 +894,19 @@ public partial class PopupWindow : Window
         AddHint("Enter", "粘贴");
         AddHint($"{m}+Tab", "短语");
         AddHint("Tab", "筛选");
+    }
+
+    private static char? VkToChar(uint vkCode, uint scanCode)
+    {
+        var keyState = new byte[256];
+        if ((Win32.GetAsyncKeyState(0x10) & 0x8000) != 0) { keyState[0x10] = 0x80; keyState[0xA0] = 0x80; }
+        if ((Win32.GetKeyState(0x14) & 0x0001) != 0) keyState[0x14] = 0x01;
+
+        var sb = new StringBuilder(4);
+        int result = Win32.ToUnicode(vkCode, scanCode, keyState, sb, sb.Capacity, 0);
+        if (result < 0) Win32.ToUnicode(vkCode, scanCode, keyState, sb, sb.Capacity, 0);
+        if (result == 1 && !char.IsControl(sb[0])) return sb[0];
+        return null;
     }
 
     private void MoveSelection(int delta)

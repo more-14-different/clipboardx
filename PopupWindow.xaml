@@ -125,26 +125,17 @@
             <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource ThemeSeparator}"/>
 
             <!-- Search Bar -->
-            <Border Grid.Row="1" Margin="8,6,8,4" Padding="10,6"
-                    Background="{DynamicResource SurfaceBrush}" CornerRadius="8">
+            <Border x:Name="SearchBarPanel" Grid.Row="1" Visibility="Collapsed"
+                    Margin="8,8,8,4" Padding="10,8" Background="{DynamicResource SurfaceBrush}" CornerRadius="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="🔍" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"
-                               Foreground="{DynamicResource MutedText}"/>
-                    <TextBox x:Name="SearchBox" Grid.Column="1"
-                             FontSize="13" VerticalAlignment="Center"
-                             Background="Transparent" BorderThickness="0"
-                             Foreground="{DynamicResource PrimaryText}"
-                             CaretBrush="{DynamicResource PrimaryText}"
-                             Padding="0" Margin="0"
-                             TextChanged="SearchBox_TextChanged"/>
-                    <TextBlock x:Name="SearchPlaceholder" Grid.Column="1" Text="搜索…"
-                               FontSize="13" VerticalAlignment="Center"
-                               Foreground="{DynamicResource MutedText}" IsHitTestVisible="False"/>
+                    <TextBlock Text="🔍" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SearchTextBlock" Grid.Column="1" Foreground="{DynamicResource PrimaryText}"
+                               FontSize="13" VerticalAlignment="Center"/>
                     <TextBlock x:Name="SearchCountText" Grid.Column="2" Foreground="{DynamicResource SecondaryText}"
                                FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
                 </Grid>
