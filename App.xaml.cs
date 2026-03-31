@@ -73,6 +73,8 @@ public partial class App : Application
             Dispatcher.Invoke(() => _popup?.TogglePopup()));
         menu.Items.Add("设置", null, (_, _) =>
             Dispatcher.Invoke(OpenSettings));
+        menu.Items.Add("关于", null, (_, _) =>
+            Dispatcher.Invoke(ShowAboutDialog));
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("卸载…", null, (_, _) =>
             Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
@@ -100,6 +102,15 @@ public partial class App : Application
     {
         if (_trayIcon != null)
             _trayIcon.Text = $"剪切板管理器 ({_settings.HotkeyDisplayName})";
+    }
+
+    private static void ShowAboutDialog()
+    {
+        System.Windows.MessageBox.Show(
+            "作者：mact\n邮箱：chaoji000010@163.com",
+            "关于剪切板管理器",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private void OpenSettings()
