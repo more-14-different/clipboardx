@@ -4,31 +4,33 @@
         Title="剪切板管理器 - 设置"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
-        Width="420" Height="580"
+        Width="420" Height="698"
         Background="{DynamicResource WindowBgBrush}">
 
-    <Grid Margin="24">
+    <Grid Margin="20,18,20,14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="20"/>
+            <RowDefinition Height="14"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="20"/>
+            <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="12"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
@@ -128,15 +130,26 @@
                        HorizontalAlignment="Center"/>
         </Border>
 
+        <!-- Run at startup -->
+        <TextBlock Grid.Row="18" Grid.Column="0" Text="开机自启动"
+                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
+        <Border Grid.Row="18" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
+                BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                Cursor="Hand" MouseLeftButtonUp="StartupCycle_Click">
+            <TextBlock x:Name="StartupText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
+                       HorizontalAlignment="Center"/>
+        </Border>
+
         <!-- Clear History -->
-        <Button Grid.Row="18" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
+        <Button Grid.Row="20" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
                 HorizontalAlignment="Left" Height="34" Padding="16,0"
                 FontSize="13" Background="{DynamicResource DangerBg}" Foreground="White"
                 BorderBrush="Transparent" Cursor="Hand" Click="ClearHistory_Click"/>
 
-        <!-- Buttons -->
-        <StackPanel Grid.Row="20" Grid.ColumnSpan="2" Orientation="Horizontal"
-                    HorizontalAlignment="Right" Margin="0,8,0,0">
+        <!-- 取消/保存：紧跟清空按钮，不用 * 行（内容多时 * 会挤占高度导致底部按钮被裁切） -->
+        <StackPanel Grid.Row="22" Grid.ColumnSpan="2" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,4,0,2">
             <Button Content="取消" Width="80" Height="34" Margin="0,0,12,0"
                     FontSize="13" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
                     BorderBrush="{DynamicResource ThemeBorder}" Click="Cancel_Click" Cursor="Hand"/>

@@ -18,6 +18,8 @@ public class AppSettings
     public string PopupPosition { get; set; } = "Caret";
     public double PopupOpacity { get; set; } = 0.95;
     public bool HideOnSameAppClick { get; set; } = true;
+    /// <summary>登录 Windows 时自动启动本程序（默认开启）。</summary>
+    public bool RunAtStartup { get; set; } = true;
     public int PreviewMaxLines { get; set; } = 2;
     public string PanelModifierKey { get; set; } = "Ctrl";
     public List<QuickPasteEntry> QuickPastes { get; set; } = new();
@@ -60,7 +62,14 @@ public class AppSettings
             if (File.Exists(SettingsFile))
             {
                 var json = File.ReadAllText(SettingsFile);
-                return JsonSerializer.Deserialize<AppSettings>(json) ?? new();
+                using (var doc = JsonDocument.Parse(json))
+                {
+                    var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new();
+                    // 旧版 settings.json 无此字段时 Json 反序列化为 false，产品默认应为开启
+                    if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
+                        settings.RunAtStartup = true;
+                    return settings;
+                }
             }
         }
         catch { }
@@ -87,6 +96,7 @@ public class AppSettings
         PopupPosition = PopupPosition,
         PopupOpacity = PopupOpacity,
         HideOnSameAppClick = HideOnSameAppClick,
+        RunAtStartup = RunAtStartup,
         PreviewMaxLines = PreviewMaxLines,
         PanelModifierKey = PanelModifierKey,
         QuickPastes = QuickPastes.Select(q => new QuickPasteEntry { Phrase = q.Phrase, Content = q.Content }).ToList()

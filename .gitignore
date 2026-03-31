@@ -8,5 +8,7 @@ obj/
 
 # Build artifacts
 build/
+publish/
+publish-self-contained/
 
 # Package manager

@@ -1,4 +1,7 @@
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using WinForms = System.Windows.Forms;
 using Drawing = System.Drawing;
 using Application = System.Windows.Application;
@@ -16,9 +19,28 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // WinForms 托盘/上下文菜单在 WPF 宿主中更稳妥
+        WinForms.Application.EnableVisualStyles();
+        WinForms.Application.SetCompatibleTextRenderingDefault(false);
+
+        if (PerUserInstall.TryProcessUninstallArgs(e.Args))
+        {
+            Shutdown();
+            return;
+        }
+
+        if (PerUserInstall.TryInstallToUserProgramsAndRelaunch(e.Args))
+        {
+            Shutdown();
+            return;
+        }
+
         _mutex = new Mutex(true, "ClipboardManager_F7A2E9B0", out bool isNew);
         if (!isNew)
         {
+#if DEBUG
+            try { Console.WriteLine("剪切板管理器已在运行中（互斥锁），本进程将退出。请查看托盘或结束旧进程。"); } catch { }
+#endif
             System.Windows.MessageBox.Show("剪切板管理器已在运行中", "提示",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
@@ -27,6 +49,8 @@ public partial class App : Application
 
         _settings = AppSettings.Load();
         ThemeManager.Apply(_settings.Theme);
+        PerUserInstall.EnsureUninstallRegistrationIfNeeded();
+        StartupRegistration.Apply(_settings.RunAtStartup);
 
         _popup = new PopupWindow();
         _popup.Initialize(_settings);
@@ -50,12 +74,26 @@ public partial class App : Application
         menu.Items.Add("设置", null, (_, _) =>
             Dispatcher.Invoke(OpenSettings));
         menu.Items.Add(new WinForms.ToolStripSeparator());
+        menu.Items.Add("卸载…", null, (_, _) =>
+            Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
         menu.Items.Add("退出", null, (_, _) =>
             Dispatcher.Invoke(Shutdown));
         _trayIcon.ContextMenuStrip = menu;
 
         _trayIcon.DoubleClick += (_, _) =>
             Dispatcher.Invoke(() => _popup?.TogglePopup());
+
+#if DEBUG
+        try
+        {
+            Console.WriteLine("剪切板管理器已在运行。");
+            Console.WriteLine("- dotnet run 时任务管理器里进程名多为「dotnet」，属于正常情况。");
+            Console.WriteLine("- 图标在系统托盘：任务栏右侧「显示隐藏的图标」展开查找（蓝色剪贴板样式）。");
+            Console.WriteLine("- 若已有一份在跑，再运行会弹窗提示「已在运行中」。");
+            Console.WriteLine("按 Ctrl+C 可结束本控制台（会结束当前这次调试进程）。");
+        }
+        catch { /* 无控制台时忽略 */ }
+#endif
     }
 
     private void UpdateTrayTooltip()
@@ -81,31 +119,26 @@ public partial class App : Application
             _settings.PopupPosition = copy.PopupPosition;
             _settings.PopupOpacity = copy.PopupOpacity;
             _settings.HideOnSameAppClick = copy.HideOnSameAppClick;
+            _settings.RunAtStartup = copy.RunAtStartup;
             _settings.PreviewMaxLines = copy.PreviewMaxLines;
             _settings.PanelModifierKey = copy.PanelModifierKey;
+            StartupRegistration.Apply(_settings.RunAtStartup);
             _settings.Save();
             UpdateTrayTooltip();
         }
     }
 
-    private static Drawing.Icon CreateTrayIcon()
+    /// <summary>与托盘相同图稿，用于 WPF 窗口标题栏。</summary>
+    public static ImageSource GetWindowIconSource()
     {
-        var bmp = new Drawing.Bitmap(32, 32);
-        using (var g = Drawing.Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.Clear(Drawing.Color.Transparent);
-            using var boardBrush = new Drawing.SolidBrush(Drawing.Color.FromArgb(137, 180, 250));
-            g.FillRectangle(boardBrush, 5, 5, 22, 26);
-            using var clipBrush = new Drawing.SolidBrush(Drawing.Color.FromArgb(205, 214, 244));
-            g.FillRectangle(clipBrush, 10, 1, 12, 8);
-            using var lineBrush = new Drawing.SolidBrush(Drawing.Color.FromArgb(30, 30, 46));
-            g.FillRectangle(lineBrush, 9, 14, 14, 2);
-            g.FillRectangle(lineBrush, 9, 19, 14, 2);
-            g.FillRectangle(lineBrush, 9, 24, 10, 2);
-        }
-        return Drawing.Icon.FromHandle(bmp.GetHicon());
+        using var icon = CreateTrayIcon();
+        return Imaging.CreateBitmapSourceFromHIcon(
+            icon.Handle,
+            System.Windows.Int32Rect.Empty,
+            BitmapSizeOptions.FromEmptyOptions());
     }
+
+    private static Drawing.Icon CreateTrayIcon() => TrayIconSvg.CreateIcon(32);
 
     protected override void OnExit(ExitEventArgs e)
     {

@@ -15,6 +15,7 @@ public partial class SettingsWindow : Window
     private string _pendingPosition;
     private double _pendingOpacity;
     private bool _pendingHideOnClick;
+    private bool _pendingRunAtStartup;
     private string _pendingModifierKey;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
@@ -24,6 +25,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(AppSettings settings)
     {
         InitializeComponent();
+        Icon = App.GetWindowIconSource();
         _settings = settings;
         _originalTheme = settings.Theme;
 
@@ -44,6 +46,9 @@ public partial class SettingsWindow : Window
 
         _pendingHideOnClick = settings.HideOnSameAppClick;
         ClickHideText.Text = _pendingHideOnClick ? "任意点击隐藏" : "仅切换应用隐藏";
+
+        _pendingRunAtStartup = settings.RunAtStartup;
+        StartupText.Text = _pendingRunAtStartup ? "开启" : "关闭";
 
         PreviewLinesBox.Text = settings.PreviewMaxLines.ToString();
 
@@ -135,6 +140,12 @@ public partial class SettingsWindow : Window
         ClickHideText.Text = _pendingHideOnClick ? "任意点击隐藏" : "仅切换应用隐藏";
     }
 
+    private void StartupCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingRunAtStartup = !_pendingRunAtStartup;
+        StartupText.Text = _pendingRunAtStartup ? "开启" : "关闭";
+    }
+
     private static string ModifierDisplayName(string m) => m switch
     {
         "Alt" => "Alt",
@@ -189,6 +200,7 @@ public partial class SettingsWindow : Window
         _settings.PopupPosition = _pendingPosition;
         _settings.PopupOpacity = _pendingOpacity;
         _settings.HideOnSameAppClick = _pendingHideOnClick;
+        _settings.RunAtStartup = _pendingRunAtStartup;
         _settings.PreviewMaxLines = previewLines;
         _settings.PanelModifierKey = _pendingModifierKey;
 
