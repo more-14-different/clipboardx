@@ -1,0 +1,12 @@
+# Visual Studio
+.vs/
+.vscode/
+
+# Binaries
+bin/
+obj/
+
+# Build artifacts
+build/
+
+# Package manager
