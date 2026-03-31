@@ -236,6 +236,21 @@
                             </Border.Style>
                             <TextBlock Text="📋 粘贴" Foreground="{DynamicResource PrimaryText}" FontSize="13"/>
                         </Border>
+                        <Border x:Name="CtxPasteAsFileBorder" Padding="10,7" CornerRadius="6" Cursor="Hand"
+                                Visibility="Collapsed"
+                                MouseLeftButtonUp="CtxPasteAsFile_Click">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <TextBlock Text="📁 作为文件粘贴（资源管理器）" Foreground="{DynamicResource PrimaryText}" FontSize="13"/>
+                        </Border>
                         <Border Padding="10,7" CornerRadius="6" Cursor="Hand"
                                 MouseLeftButtonUp="CtxShortcut_Click">
                             <Border.Style>

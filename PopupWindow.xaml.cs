@@ -409,7 +409,7 @@ public partial class PopupWindow : Window
             items = items.Where(i => i.Type == _typeFilter.Value);
 
         if (!string.IsNullOrEmpty(query))
-            items = items.Where(i => i.SearchableText.Contains(query, StringComparison.OrdinalIgnoreCase));
+            items = items.Where(i => i.MatchesSearch(query));
 
         var sorted = items
             .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(_searchText))
@@ -444,7 +444,8 @@ public partial class PopupWindow : Window
 
         if (_searchText.Length > 0 && !hasItems)
         {
-            EmptyIcon.Text = "🔍"; EmptyText.Text = "无匹配结果"; EmptySubText.Text = "尝试其他关键词";
+            EmptyIcon.Text = "🔍"; EmptyText.Text = "无匹配结果";
+            EmptySubText.Text = "可试拼音全拼或首字母，如「nihao」「nh」";
         }
         else if (!hasItems)
         {
@@ -467,6 +468,7 @@ public partial class PopupWindow : Window
 
     private void ShowPopup()
     {
+        CleanupOldClipboardExports();
         _targetWindow = Win32.GetForegroundWindow();
         _searchText = "";
         _typeFilter = null;
@@ -475,9 +477,15 @@ public partial class PopupWindow : Window
 
         RefreshFilter();
 
-        Left = 0;
-        Top = 0;
         Opacity = 0;
+
+        PositionPopup();
+        if (!TryApplyPendingPositionAsWpfLeftTop())
+        {
+            Left = 0;
+            Top = 0;
+        }
+
         Show();
         UpdateLayout();
 
@@ -639,6 +647,35 @@ public partial class PopupWindow : Window
 
         _pendingPhysX = x;
         _pendingPhysY = y;
+    }
+
+    /// <summary>
+    /// 在 Show() 之前把即将使用的物理像素坐标写成 WPF Left/Top，避免窗口先在 (0,0) 露一帧再 SetWindowPos。
+    /// </summary>
+    private bool TryApplyPendingPositionAsWpfLeftTop()
+    {
+        try
+        {
+            if (_hwnd == IntPtr.Zero)
+            {
+                var helper = new WindowInteropHelper(this);
+                helper.EnsureHandle();
+                _hwnd = helper.Handle;
+            }
+
+            var src = HwndSource.FromHwnd(_hwnd);
+            if (src?.CompositionTarget == null) return false;
+
+            var dip = src.CompositionTarget.TransformFromDevice.Transform(
+                new System.Windows.Point(_pendingPhysX, _pendingPhysY));
+            Left = dip.X;
+            Top = dip.Y;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     #endregion
@@ -894,6 +931,7 @@ public partial class PopupWindow : Window
         AddHint("Enter", "粘贴");
         AddHint($"{m}+Tab", "短语");
         AddHint("Tab", "筛选");
+        AddHint("a-z", "拼音");
     }
 
     private static char? VkToChar(uint vkCode, uint scanCode)
@@ -963,6 +1001,26 @@ public partial class PopupWindow : Window
 
     #region Paste
 
+    private static void CleanupOldClipboardExports()
+    {
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "ClipboardManager");
+            if (!Directory.Exists(dir)) return;
+            var threshold = DateTime.UtcNow.AddHours(-24);
+            foreach (var f in Directory.GetFiles(dir, "clip_*.png"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(f) < threshold)
+                        File.Delete(f);
+                }
+                catch { /* ignore */ }
+            }
+        }
+        catch { /* ignore */ }
+    }
+
     private async void PasteSelectedItem()
     {
         if (ItemsList.SelectedItem is not ClipboardEntry item) return;
@@ -1013,6 +1071,54 @@ public partial class PopupWindow : Window
         Win32.SendInput(4, inputs, Marshal.SizeOf<Win32.INPUT>());
     }
 
+    /// <summary>
+    /// 将剪贴板图片历史写入临时 PNG 并放到系统剪贴板为文件列表，便于在资源管理器中 Ctrl+V 直接保存文件。
+    /// </summary>
+    private async void PasteImageAsFileForExplorer()
+    {
+        if (ItemsList.SelectedItem is not ClipboardEntry item || item.Type != EntryType.Image) return;
+        if (item.ImageData is not { Length: > 0 }) return;
+
+        if (!item.IsQuickPaste)
+        {
+            var idx = _allItems.IndexOf(item);
+            if (idx > 0) { _allItems.RemoveAt(idx); _allItems.Insert(0, item); }
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "ClipboardManager");
+        try
+        {
+            Directory.CreateDirectory(dir);
+        }
+        catch { return; }
+
+        var path = Path.Combine(dir, $"clip_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+        try
+        {
+            File.WriteAllBytes(path, item.ImageData);
+        }
+        catch { return; }
+
+        _isSettingClipboard = true;
+        try
+        {
+            var fl = new StringCollection();
+            fl.Add(path);
+            System.Windows.Clipboard.SetFileDropList(fl);
+        }
+        catch
+        {
+            _isSettingClipboard = false;
+            try { File.Delete(path); } catch { /* ignore */ }
+            return;
+        }
+
+        HidePopup();
+        if (_targetWindow != IntPtr.Zero) Win32.SetForegroundWindow(_targetWindow);
+        await Task.Delay(60);
+        SendCtrlV();
+    }
+
     #endregion
 
     #region UI Event Handlers
@@ -1060,6 +1166,9 @@ public partial class PopupWindow : Window
             _contextEntry = entry;
             ItemsList.SelectedItem = entry;
             CtxShortcutText.Text = entry.IsQuickPaste ? "⚡ 修改快捷短语" : "⚡ 设为快捷短语";
+            CtxPasteAsFileBorder.Visibility = entry.Type == EntryType.Image
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             ContextPopup.IsOpen = true;
             e.Handled = true;
         }
@@ -1069,6 +1178,16 @@ public partial class PopupWindow : Window
     {
         ContextPopup.IsOpen = false;
         if (_contextEntry != null) { ItemsList.SelectedItem = _contextEntry; PasteSelectedItem(); }
+    }
+
+    private void CtxPasteAsFile_Click(object sender, MouseButtonEventArgs e)
+    {
+        ContextPopup.IsOpen = false;
+        if (_contextEntry is { Type: EntryType.Image })
+        {
+            ItemsList.SelectedItem = _contextEntry;
+            PasteImageAsFileForExplorer();
+        }
     }
 
     private void CtxShortcut_Click(object sender, MouseButtonEventArgs e)

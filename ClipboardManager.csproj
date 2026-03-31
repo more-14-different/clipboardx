@@ -11,4 +11,8 @@
     <AssemblyName>ClipboardManager</AssemblyName>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="NPinyin.Core" Version="3.0.0" />
+  </ItemGroup>
+
 </Project>
