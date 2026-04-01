@@ -18,9 +18,9 @@
 
 ## 下载与安装
 
-1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在最新版本 Assets 中选择 zip（版本号以发布页为准，例如 **1.1.1**）：
-   - **`ClipboardX-1.1.1-win-x64-no-runtime.zip`** — 体积小，需本机已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
-   - **`ClipboardX-1.1.1-win-x64-self-contained.zip`** — 自带运行时，无需单独安装 .NET
+1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在最新版本 Assets 中选择 zip（版本号以发布页为准，例如 **1.1.2**）：
+   - **`ClipboardX-1.1.2-win-x64-no-runtime.zip`** — 体积小，需本机已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
+   - **`ClipboardX-1.1.2-win-x64-self-contained.zip`** — 自带运行时，无需单独安装 .NET
 2. 解压后双击 **`ClipboardX.exe`** 运行。若从压缩包等临时目录启动，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并在「应用和功能」中注册卸载项；托盘菜单 **关于** 可查看当前版本与主页链接。
 3. **检查更新**：托盘图标右键 → **检查更新…**，会通过 GitHub Releases 比对版本；若有新版，会根据**当前进程是否使用本机已安装的 .NET**（检测 `System.Private.CoreLib` 是否从 `dotnet\shared\Microsoft.NETCore.App` 加载）自动选择 **no-runtime** 或 **self-contained** zip，缺一种则回退另一种；关闭程序后由脚本覆盖安装目录并自动重启。需可访问 GitHub（api.github.com 与 release 资源域名）。
 
@@ -47,17 +47,18 @@
 
 ## 文件对话框跳转
 
-在 **#32770 类公共文件对话框**（另存为、打开等）**处于前台**时，按 **文件对话框跳转键**（安装后默认 **Ctrl+G**，可在 **设置 → 文件对话框跳转键** 修改；勿与「呼出剪贴板」热键相同）即可使用。
+在 **#32770 类公共文件对话框**（另存为、打开等），以及 **WPS 表格/文字/演示** 等自带的 **「打开文件」「另存为」** 窗口（非系统公共对话框）**处于前台**时，按 **文件对话框跳转键**（安装后默认 **Ctrl+G**，可在 **设置 → 文件对话框跳转键** 修改；勿与「呼出剪贴板」热键相同）即可使用。WPS 场景下通过界面自动化与面包屑解析切换目录，**不使用** Shell 注入。
 
 ### 行为概要
 
 | 情况 | 表现 |
 |------|------|
+| 无任何可用路径 | **静默**，不提示、不弹窗 |
 | 仅 1 个可用目标路径 | **直接跳转**，不弹出列表 |
 | 多个候选路径 | 若在 **设置** 里为 **跳转列表延时** 配置了大于 0 的毫秒数，会先延时再弹出列表；**在延时内再按一次同一快捷键** 则取消列表并 **直接跳到当前预选项**（与列表中高亮一致） |
 | 延时为 0 | **立即**弹出候选列表 |
 
-候选路径来自：**当前资源管理器（或 Total Commander / XYplorer / Directory Opus 等）相关窗口**、**程序记忆的上次对话框路径**、以及你在列表里维护的 **收藏文件夹**。若没有任何可用路径，会提示先在外部文件管理器中进入目标目录。
+候选路径来自：**资源管理器**、**Total Commander / XYplorer / Directory Opus**（与开源 [QuickSwitch](https://github.com/gepruts/QuickSwitch) 相同的专用取路径方式）、**FreeCommander / Double Commander / OneCommander / Multi Commander / Tablacus Explorer / xplorer² / SpeedCommander / WinNc / fman / 微软 Files 应用**等（按 **exe 主名白名单** 对顶层窗口做**有限深度的 UI 自动化**扫描，提取已在磁盘上存在的目录路径；无官方消息接口时属尽力而为，双栏管理器可能取到其一），以及 **程序记忆的上次对话框路径**、列表中的 **收藏文件夹**。若没有任何可用路径，本次按键**静默无效**（可先在外部文件管理器中进入目标目录再试）。
 
 ### 列表内的操作（与主剪贴板面板相近）
 
@@ -69,7 +70,7 @@
 
 ### 与「Shell 深度跳转」的关系
 
-公共对话框里换文件夹有两种方式：优先尝试 **将原生 DLL 注入宿主进程** 走 `IShellBrowser::BrowseObject`（命名空间级切换）；若无 DLL 或失败则 **回退为地址栏模拟**。单文件安装包会把 **`ClipboardXShellNavigate.dll`** / **`ClipboardXShellNavigate32.dll`** 打进 **同一 exe**，运行时解压到临时目录，无需单独拷贝 DLL。详见文末 **Shell 深度跳转** 与 **shell_navigate.log** 说明。
+**仅**针对系统公共对话框：换文件夹时优先尝试 **将原生 DLL 注入宿主进程** 走 `IShellBrowser::BrowseObject`（命名空间级切换）；若无 DLL 或失败则 **回退为地址栏模拟**。WPS 等自定义对话框不走注入。单文件安装包会把 **`ClipboardXShellNavigate.dll`** / **`ClipboardXShellNavigate32.dll`** 打进 **同一 exe**，运行时解压到临时目录，无需单独拷贝 DLL。详见文末 **Shell 深度跳转** 与 **shell_navigate.log** 说明。
 
 ## 从源码运行
 
@@ -94,7 +95,7 @@ dotnet run
 | `Search/` | 拼音检索 |
 | `Media/` | 托盘 SVG 栅格化图标 |
 | `static/` | README 用演示动图（`clipx.gif`、`jumpx.gif`） |
-| 根目录 | `App.xaml` / `App.xaml.cs`、`ClipboardManager.csproj`（当前工程版本 **1.1.1**） |
+| 根目录 | `App.xaml` / `App.xaml.cs`、`ClipboardManager.csproj`（当前工程版本 **1.1.2**） |
 
 程序集根命名空间仍为 **ClipboardManager**，与文件夹解耦，避免大规模改引用。
 

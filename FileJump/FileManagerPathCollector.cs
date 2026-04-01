@@ -4,11 +4,15 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Windows.Automation;
+
 namespace ClipboardManager;
 
 /// <summary>
 /// 枚举资源管理器 / Total Commander / XYplorer / Directory Opus 等窗口的路径；
 /// 思路对齐 QuickSwitch（<see href="https://github.com/gepruts/QuickSwitch"/>）的 ShowMenu / Get_Zfolder。
+/// 另对 FreeCommander / Double Commander / OneCommander / Multi Commander / Tablacus / xplorer² 等无公开消息 API 的窗口，
+/// 在进程白名单内通过有限的 UI Automation 扫描提取可验证的本地目录路径（与社区脚本常见做法一致，弱于专用协议）。
 /// </summary>
 internal static class FileManagerPathCollector
 {
@@ -16,6 +20,23 @@ internal static class FileManagerPathCollector
     private const int TcmCopySrcPathToClip = 2029;
     private const int TcmCopyTrgPathToClip = 2030;
     private const nint XyCopyDataId = 0x400001;
+
+    /// <summary>对 THESE 进程在类名未识别时走 UIA 弱匹配（exe 主名无扩展、不区分大小写）。</summary>
+    private static readonly HashSet<string> AlternateUiPathProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "freecommander",
+        "doublecmd",
+        "onecommander",
+        "multicommander",
+        "te64",
+        "te32",
+        "xplorer2",
+        "speedcommander",
+        "nomadnet",
+        "files",
+        "winnc",
+        "fman",
+    };
 
     private static List<IntPtr> GetTopLevelZOrderTopFirst()
     {
@@ -92,6 +113,10 @@ internal static class FileManagerPathCollector
                     if (TryGetExplorerPathForHwnd(h) is { } ex)
                         Add("资源管理器", ex);
                     break;
+                default:
+                    if (TryGetFolderForAlternateUiManager(h) is { } alt)
+                        Add(AlternateManagerCandidateLabel(h), alt);
+                    break;
             }
         }
 
@@ -109,8 +134,104 @@ internal static class FileManagerPathCollector
             "ThunderRT6FormDC" => TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var x) ? x : null,
             "CabinetWClass" or "ExploreWClass" => TryGetExplorerPathForHwnd(h),
             "dopus.lister" => ParseDopusListerPaths(TryRunDopusInfoXml(h), h).Select(t => t.path).FirstOrDefault(),
-            _ => null
+            _ => TryGetFolderForAlternateUiManager(h)
         };
+    }
+
+    private static bool ShouldUseAlternateUiAutomation(string procBaseName)
+    {
+        if (AlternateUiPathProcesses.Contains(procBaseName)) return true;
+        // Microsoft Store「文件」等可能为 Files、Files!App 等变体
+        if (procBaseName.StartsWith("files", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>无专用接口时：白名单进程 + 浅层 UIA 抓取已是真实目录的路径字符串。</summary>
+    private static string? TryGetFolderForAlternateUiManager(IntPtr h)
+    {
+        if (!TryGetProcessImagePath(h, out var exe)) return null;
+        var proc = Path.GetFileNameWithoutExtension(exe);
+        if (!ShouldUseAlternateUiAutomation(proc)) return null;
+        return TryFindBestFolderPathInAutomationTree(h, out var path) ? path : null;
+    }
+
+    private static string AlternateManagerCandidateLabel(IntPtr h)
+    {
+        if (!TryGetProcessImagePath(h, out var exe))
+            return "文件管理器(UIA)";
+        return Path.GetFileNameWithoutExtension(exe).ToLowerInvariant() switch
+        {
+            "freecommander" => "FreeCommander",
+            "doublecmd" => "Double Commander",
+            "onecommander" => "OneCommander",
+            "multicommander" => "Multi Commander",
+            "te64" or "te32" => "Tablacus Explorer",
+            "xplorer2" => "xplorer²",
+            "speedcommander" => "SpeedCommander",
+            "nomadnet" => "Nomad .NET",
+            "winnc" => "WinNc",
+            "fman" => "fman",
+            var x when x.StartsWith("files", StringComparison.OrdinalIgnoreCase) => "Files",
+            _ => Path.GetFileNameWithoutExtension(exe),
+        };
+    }
+
+    private static bool TryFindBestFolderPathInAutomationTree(IntPtr hwnd, out string best)
+    {
+        best = "";
+        try
+        {
+            var root = AutomationElement.FromHandle(hwnd);
+            if (root == null) return false;
+
+            var q = new Queue<AutomationElement>();
+            q.Enqueue(root);
+            for (var seen = 0; q.Count > 0 && seen < 360; seen++)
+            {
+                var el = q.Dequeue();
+                try
+                {
+                    foreach (AutomationElement c in el.FindAll(TreeScope.Children, Condition.TrueCondition))
+                        q.Enqueue(c);
+                }
+                catch { /* ignore */ }
+
+                try
+                {
+                    if (el.TryGetCurrentPattern(ValuePattern.Pattern, out var vpObj))
+                    {
+                        var v = ((ValuePattern)vpObj).Current.Value;
+                        TryTakeLongerExistingDir(v, ref best);
+                    }
+                }
+                catch { /* ignore */ }
+
+                try
+                {
+                    TryTakeLongerExistingDir(el.Current.Name, ref best);
+                }
+                catch { /* ignore */ }
+
+                try
+                {
+                    TryTakeLongerExistingDir(el.Current.HelpText, ref best);
+                }
+                catch { /* ignore */ }
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return best.Length > 0;
+    }
+
+    private static void TryTakeLongerExistingDir(string? text, ref string best)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (!FileDialogJumpHelper.TryNormalizeToExistingDirectory(text, out var norm)) return;
+        if (norm.Length > best.Length) best = norm;
     }
 
     private static bool TryTotalCommanderPathFromClip(IntPtr tcHwnd, int commandId, out string path)

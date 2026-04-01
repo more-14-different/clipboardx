@@ -70,6 +70,11 @@ public partial class PopupWindow : Window
     private long _fileJumpLastHotkeyTick;
     private IntPtr _fileJumpLastDialogHwnd = IntPtr.Zero;
     private FileDialogJumpPickerWindow? _activeFileJumpPicker;
+    /// <summary>
+    /// <see cref="FileDialogJumpPickerWindow"/> 的 ShowDialog 会嵌套消息循环，同优先级的 BeginInvoke 仍可运行；
+    /// 若没有此项，狂按跳转热键时会再次进入 ShowDialog，嵌套模态窗导致状态错乱甚至进程退出。
+    /// </summary>
+    private bool _fileJumpPickerOpenInProgress;
     private int _fileJumpPickerSession;
     private DispatcherTimer? _fileJumpOpenDelayTimer;
     private int _fileJumpDelaySession;
@@ -955,19 +960,33 @@ public partial class PopupWindow : Window
     {
         if (_appSettings == null) return;
 
+        try
+        {
+            TryJumpFileDialogToLastFolderCore();
+        }
+        catch (Exception ex)
+        {
+            ShellNavigateLog.Write("filejump", "TryJumpFileDialogToLastFolder: " + ex);
+        }
+    }
+
+    private void TryJumpFileDialogToLastFolderCore()
+    {
+        if (_appSettings == null) return;
+
         var fgNow = Win32.GetForegroundWindow();
         var dialogHwnd = ResolveFileJumpTargetHwndInternal(fgNow);
         if (dialogHwnd == IntPtr.Zero) return;
+
+        // 列表窗正在 new 的过程中尚未赋给 _activeFileJumpPicker：忽略重复热键，避免再次排队打开。
+        if (_fileJumpPickerOpenInProgress && _activeFileJumpPicker == null)
+            return;
 
         var mem = _appSettings.LastFileDialogFolder?.Trim();
         var candidates = FileManagerPathCollector.CollectCandidates(dialogHwnd, mem);
         if (candidates.Count == 0)
         {
             ClearFileJumpDoubleTapState();
-            System.Windows.MessageBox.Show(
-                $"未找到可用路径。\n请打开资源管理器（或 Total Commander / XYplorer / Directory Opus）并进入目标文件夹，再按 {_appSettings.FileJumpHotkeyDisplayName}。",
-                "跳转到文件夹",
-                MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -1028,17 +1047,28 @@ public partial class PopupWindow : Window
             Dispatcher.BeginInvoke(() =>
             {
                 if (session != _fileJumpPickerSession) return;
-                var picker = new FileDialogJumpPickerWindow(
-                    capturedCandidates, preferIdx, jumpX, jumpY, _appSettings!, dialogForPicker);
-                _activeFileJumpPicker = picker;
-                picker.Closed += (_, _) =>
+                if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress)
+                    return;
+                _fileJumpPickerOpenInProgress = true;
+                FileDialogJumpPickerWindow? picker = null;
+                try
                 {
-                    if (ReferenceEquals(_activeFileJumpPicker, picker))
-                        _activeFileJumpPicker = null;
-                    ClearFileJumpDoubleTapState();
-                };
-                if (picker.ShowDialog() == true && !string.IsNullOrEmpty(picker.SelectedPath))
-                    FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath);
+                    picker = new FileDialogJumpPickerWindow(
+                        capturedCandidates, preferIdx, jumpX, jumpY, _appSettings!, dialogForPicker);
+                    _activeFileJumpPicker = picker;
+                    picker.Closed += (_, _) =>
+                    {
+                        if (ReferenceEquals(_activeFileJumpPicker, picker))
+                            _activeFileJumpPicker = null;
+                        ClearFileJumpDoubleTapState();
+                    };
+                    if (picker.ShowDialog() == true && !string.IsNullOrEmpty(picker.SelectedPath))
+                        FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath);
+                }
+                finally
+                {
+                    _fileJumpPickerOpenInProgress = false;
+                }
             }, DispatcherPriority.Normal);
         }
 
