@@ -31,6 +31,10 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="10"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="12"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -66,10 +70,34 @@
                        HorizontalAlignment="Center"/>
         </Border>
 
-        <!-- Theme -->
-        <TextBlock Grid.Row="6" Grid.Column="0" Text="外观主题"
+        <!-- File dialog jump hotkey -->
+        <TextBlock Grid.Row="6" Grid.Column="0" Text="文件对话框跳转键"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <Border Grid.Row="6" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+        <Border x:Name="FileJumpHotkeyBox" Grid.Row="6" Grid.Column="1"
+                HorizontalAlignment="Right" Width="140"
+                Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
+                BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                Cursor="Hand" Focusable="True"
+                MouseLeftButtonUp="FileJumpHotkeyBox_Click"
+                PreviewKeyDown="FileJumpHotkeyBox_KeyDown"
+                LostFocus="FileJumpHotkeyBox_LostFocus">
+            <TextBlock x:Name="FileJumpHotkeyText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
+                       HorizontalAlignment="Center"/>
+        </Border>
+
+        <TextBlock Grid.Row="8" Grid.Column="0" Text="跳转列表延时 (ms)"
+                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
+        <TextBox x:Name="FileJumpDelayMsBox" Grid.Row="8" Grid.Column="1"
+                 HorizontalAlignment="Right" Width="140"
+                 FontSize="14" Padding="8,6"
+                 ToolTip="0 表示立即弹出；延时内再按一次跳转键会直接跳到预选路径。"
+                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
+                 BorderBrush="{DynamicResource ThemeBorder}" CaretBrush="{DynamicResource PrimaryText}"/>
+
+        <!-- Theme -->
+        <TextBlock Grid.Row="10" Grid.Column="0" Text="外观主题"
+                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
+        <Border Grid.Row="10" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                 Cursor="Hand" MouseLeftButtonUp="ThemeCycle_Click">
@@ -78,9 +106,9 @@
         </Border>
 
         <!-- Popup Position -->
-        <TextBlock Grid.Row="8" Grid.Column="0" Text="弹出位置"
+        <TextBlock Grid.Row="12" Grid.Column="0" Text="弹出位置"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <Border Grid.Row="8" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+        <Border Grid.Row="12" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                 Cursor="Hand" MouseLeftButtonUp="PositionCycle_Click">
@@ -89,9 +117,9 @@
         </Border>
 
         <!-- Hide on same app click -->
-        <TextBlock Grid.Row="10" Grid.Column="0" Text="点击外部隐藏"
+        <TextBlock Grid.Row="14" Grid.Column="0" Text="点击外部隐藏"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <Border Grid.Row="10" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+        <Border Grid.Row="14" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                 Cursor="Hand" MouseLeftButtonUp="ClickHideCycle_Click">
@@ -100,9 +128,9 @@
         </Border>
 
         <!-- Opacity -->
-        <TextBlock Grid.Row="12" Grid.Column="0" Text="透明度"
+        <TextBlock Grid.Row="16" Grid.Column="0" Text="透明度"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <StackPanel Grid.Row="12" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+        <StackPanel Grid.Row="16" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
             <Slider x:Name="OpacitySlider" Width="100" Minimum="0.4" Maximum="1.0"
                     Value="0.95" TickFrequency="0.05" IsSnapToTickEnabled="True"
                     VerticalAlignment="Center"
@@ -112,18 +140,18 @@
         </StackPanel>
 
         <!-- Preview Max Lines -->
-        <TextBlock Grid.Row="14" Grid.Column="0" Text="预览行数"
+        <TextBlock Grid.Row="18" Grid.Column="0" Text="预览行数"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <TextBox x:Name="PreviewLinesBox" Grid.Row="14" Grid.Column="1"
+        <TextBox x:Name="PreviewLinesBox" Grid.Row="18" Grid.Column="1"
                  HorizontalAlignment="Right" Width="140"
                  FontSize="14" Padding="8,6"
                  Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
                  BorderBrush="{DynamicResource ThemeBorder}" CaretBrush="{DynamicResource PrimaryText}"/>
 
         <!-- Panel Modifier Key -->
-        <TextBlock Grid.Row="16" Grid.Column="0" Text="面板主键"
+        <TextBlock Grid.Row="20" Grid.Column="0" Text="面板主键"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <Border Grid.Row="16" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+        <Border Grid.Row="20" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                 Cursor="Hand" MouseLeftButtonUp="ModifierCycle_Click">
@@ -132,9 +160,9 @@
         </Border>
 
         <!-- Run at startup -->
-        <TextBlock Grid.Row="18" Grid.Column="0" Text="开机自启动"
+        <TextBlock Grid.Row="22" Grid.Column="0" Text="开机自启动"
                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center"/>
-        <Border Grid.Row="18" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+        <Border Grid.Row="22" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                 Cursor="Hand" MouseLeftButtonUp="StartupCycle_Click">
@@ -143,13 +171,13 @@
         </Border>
 
         <!-- Clear History -->
-        <Button Grid.Row="20" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
+        <Button Grid.Row="24" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
                 HorizontalAlignment="Left" Height="34" Padding="16,0"
                 FontSize="13" Background="{DynamicResource DangerBg}" Foreground="White"
                 BorderBrush="Transparent" Cursor="Hand" Click="ClearHistory_Click"/>
 
         <!-- 取消/保存：紧跟清空按钮，不用 * 行（内容多时 * 会挤占高度导致底部按钮被裁切） -->
-        <StackPanel Grid.Row="22" Grid.ColumnSpan="2" Orientation="Horizontal"
+        <StackPanel Grid.Row="26" Grid.ColumnSpan="2" Orientation="Horizontal"
                     HorizontalAlignment="Right" Margin="0,4,0,2">
             <Button Content="取消" Width="80" Height="34" Margin="0,0,12,0"
                     FontSize="13" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"

@@ -1,0 +1,163 @@
+<Window x:Class="ClipboardManager.FileDialogJumpPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ClipboardManager"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        Width="520"
+        MinWidth="400"
+        SizeToContent="Height"
+        MaxHeight="560"
+        ShowActivated="True"
+        Title="ClipboardX — 跳转到文件夹">
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="SharedPopupStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Grid>
+        <Border x:Name="MainBorder" Background="{DynamicResource PopupBgBrush}" CornerRadius="12" Margin="16">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.5" Color="Black"/>
+            </Border.Effect>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*" MinHeight="120"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="16,14,16,10">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📁" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="跳转到文件夹" FontSize="15" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource PrimaryText}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+
+                <Border Grid.Row="1" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource ThemeSeparator}"/>
+
+                <Border x:Name="SearchBarPanel" Grid.Row="2" Visibility="Collapsed"
+                        Margin="8,8,8,4" Padding="10,8" Background="{DynamicResource SurfaceBrush}" CornerRadius="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="🔍" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SearchTextBlock" Grid.Column="1" Foreground="{DynamicResource PrimaryText}"
+                                   FontSize="13" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SearchCountText" Grid.Column="2" Foreground="{DynamicResource SecondaryText}"
+                                   FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    </Grid>
+                </Border>
+
+                <TextBlock x:Name="FileJumpHintText" Grid.Row="3" Margin="16,6,16,4" TextWrapping="Wrap" FontSize="10"
+                           Foreground="{DynamicResource MutedText}"/>
+
+                <ListBox x:Name="ItemsList" Grid.Row="4" Margin="4,0,4,0"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         FocusVisualStyle="{x:Null}"
+                         Padding="4"
+                         MaxHeight="380"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.ScrollChanged="ItemsList_ScrollChanged"
+                         PreviewMouseDoubleClick="ItemsList_OnMouseDoubleClick"
+                         PreviewMouseRightButtonUp="ItemsList_PreviewMouseRightButtonUp">
+                    <ListBox.ContextMenu>
+                        <ContextMenu x:Name="JumpRowContextMenu" Opened="JumpRowContextMenu_Opened">
+                            <MenuItem x:Name="CtxAddFavorite" Header="⭐ 加入收藏" Click="CtxAddFavorite_Click"/>
+                            <MenuItem x:Name="CtxRemoveFavorite" Header="移除收藏" Click="CtxRemoveFavorite_Click"/>
+                            <MenuItem x:Name="CtxEditPhrase" Header="✎ 修改关键词…" Click="CtxEditPhrase_Click"/>
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type local:FileJumpPickerRow}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="22"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding IndexLabel}"
+                                           FontSize="10" TextAlignment="Center"
+                                           Foreground="{DynamicResource MutedText}" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="{Binding TypeIcon}"
+                                           FontSize="14" Width="26" TextAlignment="Center"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,8,0">
+                                    <TextBlock Text="{Binding PreviewLine}" FontSize="12"
+                                               Foreground="{DynamicResource SecondaryText}"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding PathLine}" FontSize="13"
+                                               Foreground="{DynamicResource PrimaryText}"
+                                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                    <TextBlock Text="{Binding SubInfo}" FontSize="10"
+                                               Foreground="{DynamicResource MutedText}" Margin="0,2,0,0"
+                                               Visibility="{Binding SubInfoVisibility}"/>
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"
+                            Margin="16,8,16,4">
+                    <Border Padding="12,7" CornerRadius="6" Cursor="Hand" Margin="0,0,8,0"
+                            Background="{DynamicResource SurfaceBrush}"
+                            MouseLeftButtonUp="Cancel_Click">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="取消" FontSize="12" Foreground="{DynamicResource SecondaryText}"/>
+                    </Border>
+                    <Border Padding="12,7" CornerRadius="6" Cursor="Hand"
+                            Background="{DynamicResource AccentBg}"
+                            MouseLeftButtonUp="Ok_Click">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{DynamicResource AccentBg}"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Opacity" Value="0.88"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="跳转  (Enter)" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentFg}"/>
+                    </Border>
+                </StackPanel>
+
+                <Border Grid.Row="6" Padding="14,8" Background="{DynamicResource FooterBrush}"
+                        CornerRadius="0,0,12,12">
+                    <TextBlock x:Name="FooterHintsText" Foreground="{DynamicResource MutedText}" FontSize="10"
+                               HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"/>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

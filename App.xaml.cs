@@ -237,6 +237,9 @@ public partial class App : Application
             _settings.MaxItems = copy.MaxItems;
             _settings.HotkeyModifiers = copy.HotkeyModifiers;
             _settings.HotkeyKey = copy.HotkeyKey;
+            _settings.FileJumpHotkeyModifiers = copy.FileJumpHotkeyModifiers;
+            _settings.FileJumpHotkeyKey = copy.FileJumpHotkeyKey;
+            _settings.FileJumpPickerShowDelayMs = copy.FileJumpPickerShowDelayMs;
             _settings.Theme = copy.Theme;
             _settings.PopupPosition = copy.PopupPosition;
             _settings.PopupOpacity = copy.PopupOpacity;

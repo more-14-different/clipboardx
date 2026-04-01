@@ -1,0 +1,347 @@
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace ClipboardManager;
+
+/// <summary>
+/// 将原生 DLL 注入文件对话框<strong>宿主进程</strong>，在目标进程内调用
+/// <c>SendMessage(WM_USER+7)</c> 取得 IShellBrowser 并 <c>BrowseObject</c>，
+/// 实现 Shell 命名空间级目录切换（不模拟键盘）。失败时由 <see cref="FileDialogJumpHelper"/> 回退。
+/// </summary>
+internal static class ShellDialogDeepNavigate
+{
+    private const string ExportName = "ClipboardX_RemoteNavigate";
+    private const uint MemCommit = 0x1000;
+    private const uint MemReserve = 0x2000;
+    private const uint MemRelease = 0x8000;
+    private const uint PageReadWrite = 0x04;
+    private const uint ListModulesAll = 0x03;
+
+    private const uint ProcessCreateThread = 0x0002;
+    private const uint ProcessQueryInformation = 0x0400;
+    private const uint ProcessVmOperation = 0x0008;
+    private const uint ProcessVmRead = 0x0010;
+    private const uint ProcessVmWrite = 0x0020;
+
+    /// <summary>路径 WCHAR[520]，与 native NavigatePayload.path 一致。</summary>
+    private const int MaxPathChars = 520;
+
+    public static bool TryBrowseObjectInject(IntPtr dialogHwnd, string folderPath)
+    {
+        if (dialogHwnd == IntPtr.Zero)
+        {
+            ShellNavigateLog.WriteInjector("aborted: dialog HWND zero");
+            return false;
+        }
+        if (!Directory.Exists(folderPath))
+        {
+            ShellNavigateLog.WriteInjector($"aborted: folder not exists: {folderPath}");
+            return false;
+        }
+        if (!Win32.IsWindow(dialogHwnd))
+        {
+            ShellNavigateLog.WriteInjector($"aborted: invalid window 0x{dialogHwnd.ToInt64():X}");
+            return false;
+        }
+
+        Win32.GetWindowThreadProcessId(dialogHwnd, out var pid);
+        if (pid == 0)
+        {
+            ShellNavigateLog.WriteInjector("aborted: pid=0");
+            return false;
+        }
+
+        var access = ProcessCreateThread | ProcessQueryInformation | ProcessVmOperation | ProcessVmRead | ProcessVmWrite;
+        var hProcess = OpenProcess(access, false, pid);
+        if (hProcess == IntPtr.Zero)
+        {
+            ShellNavigateLog.WriteInjectorWin32($"OpenProcess pid={pid} failed", Marshal.GetLastWin32Error());
+            return false;
+        }
+
+        try
+        {
+            if (!IsSameArchAsCurrentProcess(hProcess))
+            {
+                ShellNavigateLog.WriteInjector(
+                    $"arch mismatch: skip injection (ClipboardX {(Environment.Is64BitProcess ? "x64" : "x86")}, target pid={pid})");
+                return false;
+            }
+
+            var target64 = Environment.Is64BitProcess;
+            var dllFileName = target64 ? "ClipboardXShellNavigate.dll" : "ClipboardXShellNavigate32.dll";
+            var dllFullPath = Path.Combine(AppContext.BaseDirectory, dllFileName);
+            if (!File.Exists(dllFullPath))
+            {
+                ShellNavigateLog.WriteInjector($"missing DLL: {dllFullPath}");
+                return false;
+            }
+
+            ShellNavigateLog.WriteInjector(
+                $"start pid={pid} hwnd=0x{dialogHwnd.ToInt64():X} dll={dllFileName} path={folderPath}");
+
+            if (!EnsureRemoteDllLoaded(hProcess, dllFullPath, dllFileName, out var remoteBase))
+            {
+                ShellNavigateLog.WriteInjectorWin32(
+                    "EnsureRemoteDllLoaded failed", Marshal.GetLastWin32Error());
+                return false;
+            }
+
+            ShellNavigateLog.WriteInjector($"remote module 0x{remoteBase.ToInt64():X}");
+
+            var remoteFn = GetRemoteExportAddress(hProcess, remoteBase, dllFullPath, ExportName);
+            if (remoteFn == IntPtr.Zero)
+            {
+                ShellNavigateLog.WriteInjectorWin32("GetRemoteExportAddress failed", Marshal.GetLastWin32Error());
+                return false;
+            }
+
+            ShellNavigateLog.WriteInjector($"remote {ExportName} 0x{remoteFn.ToInt64():X}");
+
+            var payload = BuildPayload(dialogHwnd, Path.GetFullPath(folderPath), target64);
+            var pPayload = VirtualAllocEx(hProcess, IntPtr.Zero, (nuint)payload.Length, MemCommit | MemReserve, PageReadWrite);
+            if (pPayload == IntPtr.Zero)
+            {
+                ShellNavigateLog.WriteInjectorWin32("VirtualAllocEx payload failed", Marshal.GetLastWin32Error());
+                return false;
+            }
+
+            try
+            {
+                if (!WriteProcessMemory(hProcess, pPayload, payload, (nuint)payload.Length, out _))
+                {
+                    ShellNavigateLog.WriteInjectorWin32("WriteProcessMemory payload failed", Marshal.GetLastWin32Error());
+                    return false;
+                }
+
+                var t = CreateRemoteThread(hProcess, IntPtr.Zero, 0, remoteFn, pPayload, 0, IntPtr.Zero);
+                if (t == IntPtr.Zero)
+                {
+                    ShellNavigateLog.WriteInjectorWin32("CreateRemoteThread failed", Marshal.GetLastWin32Error());
+                    return false;
+                }
+                try
+                {
+                    WaitForSingleObject(t, 15000);
+                    GetExitCodeThread(t, out var code);
+                    if (code == 0)
+                    {
+                        ShellNavigateLog.WriteInjector("remote thread OK (see native lines in same log file)");
+                        return true;
+                    }
+                    ShellNavigateLog.WriteInjector($"remote thread exit code={code} (0x{code:X})");
+                    return false;
+                }
+                finally
+                {
+                    CloseHandle(t);
+                }
+            }
+            finally
+            {
+                VirtualFreeEx(hProcess, pPayload, 0, MemRelease);
+            }
+        }
+        finally
+        {
+            CloseHandle(hProcess);
+        }
+    }
+
+    private static bool IsSameArchAsCurrentProcess(IntPtr hProcess)
+    {
+        if (!Environment.Is64BitOperatingSystem)
+            return true;
+        if (!IsWow64Process(hProcess, out var targetWow))
+            return true;
+        var target64 = !targetWow;
+        return target64 == Environment.Is64BitProcess;
+    }
+
+    private static byte[] BuildPayload(IntPtr hwnd, string fullPath, bool ptr64)
+    {
+        var pathUtf16 = Encoding.Unicode.GetBytes(fullPath);
+        if (pathUtf16.Length > (MaxPathChars - 1) * 2)
+            Array.Resize(ref pathUtf16, (MaxPathChars - 1) * 2);
+
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+        if (ptr64)
+            bw.Write(hwnd.ToInt64());
+        else
+            bw.Write(hwnd.ToInt32());
+
+        bw.Write(pathUtf16);
+        bw.Write((ushort)0);
+
+        var total = ptr64 ? 8 + MaxPathChars * 2 : 4 + MaxPathChars * 2;
+        while (ms.Length < total)
+            bw.Write((byte)0);
+
+        return ms.ToArray();
+    }
+
+    private static bool EnsureRemoteDllLoaded(IntPtr hProcess, string dllFullPath, string dllFileName, out IntPtr remoteBase)
+    {
+        remoteBase = FindRemoteModule(hProcess, dllFileName);
+        if (remoteBase != IntPtr.Zero)
+        {
+            ShellNavigateLog.WriteInjector($"DLL already loaded in target: 0x{remoteBase.ToInt64():X}");
+            return true;
+        }
+
+        var pathBytes = Encoding.Unicode.GetBytes(dllFullPath + "\0");
+        var pPath = VirtualAllocEx(hProcess, IntPtr.Zero, (nuint)pathBytes.Length, MemCommit | MemReserve, PageReadWrite);
+        if (pPath == IntPtr.Zero)
+        {
+            ShellNavigateLog.WriteInjectorWin32("VirtualAllocEx(dll path) failed", Marshal.GetLastWin32Error());
+            return false;
+        }
+
+        try
+        {
+            if (!WriteProcessMemory(hProcess, pPath, pathBytes, (nuint)pathBytes.Length, out _))
+            {
+                ShellNavigateLog.WriteInjectorWin32("WriteProcessMemory(dll path) failed", Marshal.GetLastWin32Error());
+                return false;
+            }
+
+            var loadLib = GetRemoteKernelProcAddress(hProcess, "LoadLibraryW");
+            if (loadLib == IntPtr.Zero)
+            {
+                ShellNavigateLog.WriteInjector("GetRemoteKernelProcAddress LoadLibraryW failed");
+                return false;
+            }
+
+            var t = CreateRemoteThread(hProcess, IntPtr.Zero, 0, loadLib, pPath, 0, IntPtr.Zero);
+            if (t == IntPtr.Zero)
+            {
+                ShellNavigateLog.WriteInjectorWin32("CreateRemoteThread(LoadLibraryW) failed", Marshal.GetLastWin32Error());
+                return false;
+            }
+            try
+            {
+                WaitForSingleObject(t, 20000);
+                GetExitCodeThread(t, out var exit);
+                if (exit == 0)
+                {
+                    ShellNavigateLog.WriteInjector($"remote LoadLibraryW returned NULL for: {dllFullPath}");
+                    return false;
+                }
+                ShellNavigateLog.WriteInjector($"remote LoadLibraryW exit/HMODULE=0x{exit:X}");
+            }
+            finally
+            {
+                CloseHandle(t);
+            }
+        }
+        finally
+        {
+            VirtualFreeEx(hProcess, pPath, 0, MemRelease);
+        }
+
+        remoteBase = FindRemoteModule(hProcess, dllFileName);
+        if (remoteBase == IntPtr.Zero)
+            ShellNavigateLog.WriteInjector($"FindRemoteModule after load: not found {dllFileName}");
+        return remoteBase != IntPtr.Zero;
+    }
+
+    private static IntPtr GetRemoteExportAddress(IntPtr hProcess, IntPtr remoteModule, string localDllPath, string exportName)
+    {
+        var localMod = LoadLibraryW(localDllPath);
+        if (localMod == IntPtr.Zero)
+            return IntPtr.Zero;
+        try
+        {
+            var localFn = GetProcAddress(localMod, exportName);
+            if (localFn == IntPtr.Zero)
+                return IntPtr.Zero;
+            var rva = localFn.ToInt64() - localMod.ToInt64();
+            return (IntPtr)(remoteModule.ToInt64() + rva);
+        }
+        finally
+        {
+            FreeLibrary(localMod);
+        }
+    }
+
+    private static IntPtr GetRemoteKernelProcAddress(IntPtr hProcess, string procName)
+    {
+        var localK = GetModuleHandleW("kernel32.dll");
+        var remoteK = FindRemoteModule(hProcess, "kernel32.dll");
+        if (localK == IntPtr.Zero || remoteK == IntPtr.Zero) return IntPtr.Zero;
+        var localFn = GetProcAddress(localK, procName);
+        if (localFn == IntPtr.Zero) return IntPtr.Zero;
+        var rva = localFn.ToInt64() - localK.ToInt64();
+        return (IntPtr)(remoteK.ToInt64() + rva);
+    }
+
+    private static IntPtr FindRemoteModule(IntPtr hProcess, string fileName)
+    {
+        var want = fileName.ToLowerInvariant();
+        var mods = new IntPtr[4096];
+        if (!EnumProcessModulesEx(hProcess, mods, mods.Length * IntPtr.Size, out var written, ListModulesAll))
+            return IntPtr.Zero;
+
+        var n = written / IntPtr.Size;
+        var sb = new StringBuilder(2048);
+        for (var i = 0; i < n; i++)
+        {
+            if (mods[i] == IntPtr.Zero) continue;
+            sb.Clear();
+            if (Win32.GetModuleFileNameEx(hProcess, mods[i], sb, sb.Capacity) == 0)
+                continue;
+            var fn = Path.GetFileName(sb.ToString()).ToLowerInvariant();
+            if (fn == want)
+                return mods[i];
+        }
+        return IntPtr.Zero;
+    }
+
+    #region Native
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool IsWow64Process(IntPtr hProcess, out bool wow64Process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, nuint dwSize, uint flAllocationType, uint flProtect);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool VirtualFreeEx(IntPtr hProcess, IntPtr lpAddress, nuint dwSize, uint dwFreeType);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, nuint nSize, out UIntPtr lpNumberOfBytesWritten);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, nuint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeThread(IntPtr hThread, out uint lpExitCode);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibraryW(string lpLibFileName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FreeLibrary(IntPtr hModule);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr GetModuleHandleW(string lpModuleName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
+    private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    private static extern bool EnumProcessModulesEx(IntPtr hProcess, [Out] IntPtr[] lphModule, int cb, out int lpcbNeeded, uint dwFilterFlag);
+
+    #endregion
+}

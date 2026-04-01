@@ -31,4 +31,10 @@
     <Compile Remove="tools\**\*" />
   </ItemGroup>
 
+  <!-- 原生 Shell 跳转 DLL：在 Visual Studio 中生成 native\ShellNavigate\ClipboardXShellNavigate.vcxproj（x64 / Win32 Release）后出现即会复制 -->
+  <ItemGroup>
+    <None Include="native\ShellNavigate\bin\x64\Release\ClipboardXShellNavigate.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('native\ShellNavigate\bin\x64\Release\ClipboardXShellNavigate.dll')" />
+    <None Include="native\ShellNavigate\bin\Win32\Release\ClipboardXShellNavigate32.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('native\ShellNavigate\bin\Win32\Release\ClipboardXShellNavigate32.dll')" />
+  </ItemGroup>
+
 </Project>

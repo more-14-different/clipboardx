@@ -65,3 +65,13 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 | 使用 **no-runtime** 安装包 | Windows 10/11，并已安装 **.NET 8**（桌面）运行时 |
 | 使用 **self-contained** 安装包 | Windows 10/11 |
 | 本地开发 | .NET 8 SDK |
+
+## Shell 深度跳转（可选原生 DLL）与日志
+
+文件对话框 **Ctrl+G** 跳文件夹时，若存在与主程序同目录的 **`ClipboardXShellNavigate.dll`**（及 32 位宿主用的 **`ClipboardXShellNavigate32.dll`**），会尝试 **注入宿主进程并 `IShellBrowser::BrowseObject`**；失败则自动回退到地址栏模拟。
+
+- **编译原生 DLL**：已装 VS / Build Tools（含 **MSVC** + **Windows SDK**）时，在仓库根目录执行  
+  `powershell -ExecutionPolicy Bypass -File native\ShellNavigate\build.ps1`  
+  若本机无工具链可加参数 **`-InstallBuildTools`**（通过 winget 安装 VS 2022 Build Tools 的 C++ 工作负荷，耗时较长）。生成物会复制到 `bin\Release\net8.0-windows\` 与 `bin\Debug\net8.0-windows\`（便于 Debug 运行）。若 MSBuild 报工具集错误，可编辑 `native\ShellNavigate\ClipboardXShellNavigate.vcxproj` 将 `PlatformToolset` 的 **v143** 改为 **v142**（仅当已安装 VS 2019 工具集时）或反之，与本地安装一致。仓库默认 **v143**（VS 2022）。
+- **诊断日志（注入端 + 被注入端）**：统一写入  
+  **`%LocalAppData%\ClipboardX\shell_navigate.log`**（UTF-8，与 `ClipboardX` 配置目录同根）。注入过程由 **inject** 前缀记录；在宿主进程内执行的 **native** 前缀由同名 DLL 写入，便于对照 `BrowseObject`  HRESULT。

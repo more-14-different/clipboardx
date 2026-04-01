@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Brush = System.Windows.Media.Brush;
 using Button = System.Windows.Controls.Button;
 using Orientation = System.Windows.Controls.Orientation;
@@ -20,6 +21,7 @@ namespace ClipboardManager;
 public partial class PopupWindow : Window
 {
     private const int HotkeyId = 9001;
+    private const int HotkeyJumpLastFolderId = 9002;
 
     private readonly List<ClipboardEntry> _allItems = new();
     private readonly ObservableCollection<ClipboardEntry> _displayItems = new();
@@ -56,7 +58,23 @@ public partial class PopupWindow : Window
     private bool _clickReceivedByPopup;
     private int _pendingPhysX, _pendingPhysY;
     private bool _isOurSetWindowPos;
+    /// <summary>Show/UpdateLayout 过程中阻止 WPF 改写位置，避免先出现在 (0,0) 或顶边再跳到目标点。</summary>
+    private bool _lockPopupWindowNomove;
     private List<QuickPasteEntry> _quickPastes = new();
+    private AppSettings? _appSettings;
+    private IntPtr _lastForegroundForDialogTrack = IntPtr.Zero;
+
+    /// <summary>文件对话框跳转：2 秒内第二次 Ctrl+G 直接跳默认项（与列表预选一致）。</summary>
+    private const int FileJumpDoubleTapMs = 2000;
+
+    private long _fileJumpLastHotkeyTick;
+    private IntPtr _fileJumpLastDialogHwnd = IntPtr.Zero;
+    private FileDialogJumpPickerWindow? _activeFileJumpPicker;
+    private int _fileJumpPickerSession;
+    private DispatcherTimer? _fileJumpOpenDelayTimer;
+    private int _fileJumpDelaySession;
+    private uint _fileJumpHotkeyModifiers;
+    private uint _fileJumpHotkeyKey;
 
     public event Action? SettingsRequested;
 
@@ -69,6 +87,8 @@ public partial class PopupWindow : Window
 
     public void Initialize(AppSettings settings)
     {
+        _appSettings = settings;
+        _lastForegroundForDialogTrack = Win32.GetForegroundWindow();
         _maxItems = settings.MaxItems;
         _hotkeyModifiers = settings.HotkeyModifiers;
         _hotkeyKey = settings.HotkeyKey;
@@ -78,6 +98,8 @@ public partial class PopupWindow : Window
         _panelModifierKey = settings.PanelModifierKey;
         ClipboardEntry.PreviewMaxLines = settings.PreviewMaxLines;
         _quickPastes = settings.QuickPastes;
+        _fileJumpHotkeyModifiers = settings.FileJumpHotkeyModifiers;
+        _fileJumpHotkeyKey = settings.FileJumpHotkeyKey;
 
         LoadQuickPastes();
         UpdateFooterHints();
@@ -102,7 +124,16 @@ public partial class PopupWindow : Window
                 "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
+        if (!Win32.RegisterHotKey(_hwnd, HotkeyJumpLastFolderId,
+                _fileJumpHotkeyModifiers | Win32.MOD_NOREPEAT, _fileJumpHotkeyKey))
+        {
+            System.Windows.MessageBox.Show(
+                $"快捷键 {settings.FileJumpHotkeyDisplayName}（文件对话框跳转）注册失败，可能与其他软件冲突",
+                "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
         Win32.AddClipboardFormatListener(_hwnd);
+        InstallForegroundWatcher();
         UpdateEmptyState();
     }
 
@@ -112,6 +143,7 @@ public partial class PopupWindow : Window
         UninstallMouseHook();
         UninstallForegroundWatcher();
         Win32.UnregisterHotKey(_hwnd, HotkeyId);
+        Win32.UnregisterHotKey(_hwnd, HotkeyJumpLastFolderId);
         Win32.RemoveClipboardFormatListener(_hwnd);
     }
 
@@ -125,6 +157,20 @@ public partial class PopupWindow : Window
         }
         _hotkeyModifiers = modifiers;
         _hotkeyKey = key;
+        return true;
+    }
+
+    public bool UpdateFileJumpHotkey(uint modifiers, uint key)
+    {
+        Win32.UnregisterHotKey(_hwnd, HotkeyJumpLastFolderId);
+        if (!Win32.RegisterHotKey(_hwnd, HotkeyJumpLastFolderId, modifiers | Win32.MOD_NOREPEAT, key))
+        {
+            Win32.RegisterHotKey(_hwnd, HotkeyJumpLastFolderId,
+                _fileJumpHotkeyModifiers | Win32.MOD_NOREPEAT, _fileJumpHotkeyKey);
+            return false;
+        }
+        _fileJumpHotkeyModifiers = modifiers;
+        _fileJumpHotkeyKey = key;
         return true;
     }
 
@@ -150,6 +196,19 @@ public partial class PopupWindow : Window
                     "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
                 settings.HotkeyModifiers = _hotkeyModifiers;
                 settings.HotkeyKey = _hotkeyKey;
+            }
+        }
+
+        if (settings.FileJumpHotkeyModifiers != _fileJumpHotkeyModifiers
+            || settings.FileJumpHotkeyKey != _fileJumpHotkeyKey)
+        {
+            if (!UpdateFileJumpHotkey(settings.FileJumpHotkeyModifiers, settings.FileJumpHotkeyKey))
+            {
+                System.Windows.MessageBox.Show(
+                    $"文件对话框跳转快捷键 {settings.FileJumpHotkeyDisplayName} 注册失败，已恢复原快捷键",
+                    "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                settings.FileJumpHotkeyModifiers = _fileJumpHotkeyModifiers;
+                settings.FileJumpHotkeyKey = _fileJumpHotkeyKey;
             }
         }
     }
@@ -292,7 +351,7 @@ public partial class PopupWindow : Window
                 break;
 
             case Win32.WM_WINDOWPOSCHANGING:
-                if (!_isOurSetWindowPos && _isPopupVisible)
+                if (!_isOurSetWindowPos && (_isPopupVisible || _lockPopupWindowNomove))
                 {
                     var pos = Marshal.PtrToStructure<Win32.WINDOWPOS>(lParam);
                     pos.flags |= Win32.SWP_NOMOVE;
@@ -305,7 +364,17 @@ public partial class PopupWindow : Window
                 handled = true;
                 break;
             case Win32.WM_HOTKEY:
-                if (wParam.ToInt32() == HotkeyId) { TogglePopup(); handled = true; }
+                switch (wParam.ToInt32())
+                {
+                    case HotkeyId:
+                        TogglePopup();
+                        handled = true;
+                        break;
+                    case HotkeyJumpLastFolderId:
+                        TryJumpFileDialogToLastFolder();
+                        handled = true;
+                        break;
+                }
                 break;
         }
         return IntPtr.Zero;
@@ -318,6 +387,7 @@ public partial class PopupWindow : Window
     private void OnClipboardUpdate()
     {
         if (_isSettingClipboard) { _isSettingClipboard = false; return; }
+        if (ClipboardGate.IsActive) return;
 
         try
         {
@@ -493,25 +563,28 @@ public partial class PopupWindow : Window
 
         Opacity = 0;
 
-        PositionPopup();
-        if (!TryApplyPendingPositionAsWpfLeftTop())
+        _lockPopupWindowNomove = true;
+        try
         {
-            Left = 0;
-            Top = 0;
+            PositionPopup();
+            TryApplyPendingPositionAsWpfLeftTop();
+            ApplyPendingPositionSetWindowPos();
+            TryApplyPendingPositionAsWpfLeftTop();
+
+            Show();
+            UpdateLayout();
+
+            PositionPopup();
+
+            _isPopupVisible = true;
+
+            ApplyPendingPositionSetWindowPos();
+            TryApplyPendingPositionAsWpfLeftTop();
         }
-
-        Show();
-        UpdateLayout();
-
-        PositionPopup();
-
-        _isPopupVisible = true;
-
-        _isOurSetWindowPos = true;
-        Win32.SetWindowPos(_hwnd, IntPtr.Zero,
-            _pendingPhysX, _pendingPhysY, 0, 0,
-            Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
-        _isOurSetWindowPos = false;
+        finally
+        {
+            _lockPopupWindowNomove = false;
+        }
 
         Opacity = _popupOpacity;
 
@@ -520,15 +593,29 @@ public partial class PopupWindow : Window
 
         InstallKeyboardHook();
         InstallMouseHook();
-        InstallForegroundWatcher();
+    }
+
+    private void ApplyPendingPositionSetWindowPos()
+    {
+        _isOurSetWindowPos = true;
+        try
+        {
+            Win32.SetWindowPos(_hwnd, IntPtr.Zero,
+                _pendingPhysX, _pendingPhysY, 0, 0,
+                Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+        }
+        finally
+        {
+            _isOurSetWindowPos = false;
+        }
     }
 
     private void HidePopup()
     {
         _isPopupVisible = false;
+        _lockPopupWindowNomove = false;
         UninstallKeyboardHook();
         UninstallMouseHook();
-        UninstallForegroundWatcher();
         ContextPopup.IsOpen = false;
         PhraseEditPopup.IsOpen = false;
         _phraseEditEntry = null;
@@ -806,6 +893,14 @@ public partial class PopupWindow : Window
         IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
         int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
+        var prev = _lastForegroundForDialogTrack;
+        _lastForegroundForDialogTrack = hwnd;
+
+        Dispatcher.BeginInvoke(() => TryRememberFolderFromDialog(prev));
+
+        if (FileDialogJumpHelper.IsLikelyFileDialog(hwnd))
+            ScheduleSnapshotFolderFromDialog(hwnd);
+
         if (!_isPopupVisible) return;
         if (hwnd == _hwnd || hwnd == _targetWindow) return;
 
@@ -815,10 +910,205 @@ public partial class PopupWindow : Window
         Dispatcher.BeginInvoke(HidePopup);
     }
 
+    /// <summary>对话框成为前台后稍候再读一次路径，便于在同一会话内浏览后也能更新「上次路径」。</summary>
+    private void ScheduleSnapshotFolderFromDialog(IntPtr dialogHwnd)
+    {
+        if (_appSettings == null || dialogHwnd == IntPtr.Zero) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(450)
+            };
+            var target = dialogHwnd;
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                if (_appSettings == null) return;
+                if (!Win32.IsWindow(target)) return;
+                if (Win32.GetForegroundWindow() != target) return;
+                if (!FileDialogJumpHelper.TryReadCurrentFolder(target, out var folder)
+                    || string.IsNullOrEmpty(folder)) return;
+                if (folder == _appSettings.LastFileDialogFolder) return;
+                _appSettings.LastFileDialogFolder = folder;
+                _appSettings.Save();
+            };
+            timer.Start();
+        }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>前台刚从「打开/保存」对话框切走时，尝试记下当时所在文件夹。</summary>
+    private void TryRememberFolderFromDialog(IntPtr previousHwnd)
+    {
+        if (_appSettings == null || previousHwnd == IntPtr.Zero || previousHwnd == _hwnd) return;
+        if (!Win32.IsWindow(previousHwnd)) return;
+        if (!FileDialogJumpHelper.IsLikelyFileDialog(previousHwnd)) return;
+        if (!FileDialogJumpHelper.TryReadCurrentFolder(previousHwnd, out var folder)
+            || string.IsNullOrEmpty(folder)) return;
+
+        if (folder == _appSettings.LastFileDialogFolder) return;
+        _appSettings.LastFileDialogFolder = folder;
+        _appSettings.Save();
+    }
+
+    private void TryJumpFileDialogToLastFolder()
+    {
+        if (_appSettings == null) return;
+
+        var fgNow = Win32.GetForegroundWindow();
+        var dialogHwnd = ResolveFileJumpTargetHwndInternal(fgNow);
+        if (dialogHwnd == IntPtr.Zero) return;
+
+        var mem = _appSettings.LastFileDialogFolder?.Trim();
+        var candidates = FileManagerPathCollector.CollectCandidates(dialogHwnd, mem);
+        if (candidates.Count == 0)
+        {
+            ClearFileJumpDoubleTapState();
+            System.Windows.MessageBox.Show(
+                $"未找到可用路径。\n请打开资源管理器（或 Total Commander / XYplorer / Directory Opus）并进入目标文件夹，再按 {_appSettings.FileJumpHotkeyDisplayName}。",
+                "跳转到文件夹",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (candidates.Count == 1)
+        {
+            ClearFileJumpDoubleTapState();
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[0].Path);
+            return;
+        }
+
+        var prefer = PreferCandidateIndex(dialogHwnd, candidates);
+
+        if (_activeFileJumpPicker != null)
+        {
+            _fileJumpPickerSession++;
+            ClearFileJumpDoubleTapState();
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path);
+            Dispatcher.BeginInvoke(() => _activeFileJumpPicker?.Close(),
+                System.Windows.Threading.DispatcherPriority.Normal);
+            return;
+        }
+
+        var tick = Environment.TickCount64;
+        var sameDialog = dialogHwnd == _fileJumpLastDialogHwnd;
+        var withinDoubleTap = sameDialog && _fileJumpLastHotkeyTick != 0
+                                        && tick - _fileJumpLastHotkeyTick >= 0
+                                        && tick - _fileJumpLastHotkeyTick <= FileJumpDoubleTapMs;
+
+        if (withinDoubleTap)
+        {
+            _fileJumpPickerSession++;
+            ClearFileJumpDoubleTapState();
+            var path = candidates[prefer].Path;
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, path);
+            Dispatcher.BeginInvoke(() => _activeFileJumpPicker?.Close(),
+                System.Windows.Threading.DispatcherPriority.Normal);
+            return;
+        }
+
+        _fileJumpLastHotkeyTick = tick;
+        _fileJumpLastDialogHwnd = dialogHwnd;
+        var session = unchecked(++_fileJumpPickerSession);
+        Win32.GetCursorPos(out var jumpMouseScreen);
+
+        CancelFileJumpPickerDelay();
+        var delaySession = _fileJumpDelaySession;
+
+        var capturedCandidates = candidates.ToList();
+        var preferIdx = prefer;
+        var jumpX = jumpMouseScreen.X;
+        var jumpY = jumpMouseScreen.Y;
+        var dialogForPicker = dialogHwnd;
+
+        var delayMs = Math.Clamp(_appSettings.FileJumpPickerShowDelayMs, 0, 10000);
+
+        void QueueOpenFileJumpPicker()
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (session != _fileJumpPickerSession) return;
+                var picker = new FileDialogJumpPickerWindow(
+                    capturedCandidates, preferIdx, jumpX, jumpY, _appSettings!, dialogForPicker);
+                _activeFileJumpPicker = picker;
+                picker.Closed += (_, _) =>
+                {
+                    if (ReferenceEquals(_activeFileJumpPicker, picker))
+                        _activeFileJumpPicker = null;
+                    ClearFileJumpDoubleTapState();
+                };
+                if (picker.ShowDialog() == true && !string.IsNullOrEmpty(picker.SelectedPath))
+                    FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath);
+            }, DispatcherPriority.Normal);
+        }
+
+        if (delayMs <= 0)
+        {
+            QueueOpenFileJumpPicker();
+            return;
+        }
+
+        _fileJumpOpenDelayTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(delayMs),
+        };
+        _fileJumpOpenDelayTimer.Tick += (_, _) =>
+        {
+            _fileJumpOpenDelayTimer?.Stop();
+            _fileJumpOpenDelayTimer = null;
+            if (delaySession != _fileJumpDelaySession) return;
+            QueueOpenFileJumpPicker();
+        };
+        _fileJumpOpenDelayTimer.Start();
+    }
+
+    private void CancelFileJumpPickerDelay()
+    {
+        if (_fileJumpOpenDelayTimer != null)
+        {
+            _fileJumpOpenDelayTimer.Stop();
+            _fileJumpOpenDelayTimer = null;
+        }
+        unchecked { _fileJumpDelaySession++; }
+    }
+
+    /// <summary>前台可能是跳转列表窗；此时仍应对背后文件对话框取路径、导航。</summary>
+    private IntPtr ResolveFileJumpTargetHwndInternal(IntPtr fgNow)
+    {
+        if (FileDialogJumpHelper.ClassifyFileDialog(fgNow) != FileDialogKind.None)
+            return fgNow;
+
+        if (_fileJumpLastDialogHwnd != IntPtr.Zero
+            && Win32.IsWindow(_fileJumpLastDialogHwnd)
+            && FileDialogJumpHelper.ClassifyFileDialog(_fileJumpLastDialogHwnd) != FileDialogKind.None)
+            return _fileJumpLastDialogHwnd;
+
+        return IntPtr.Zero;
+    }
+
+    private static int PreferCandidateIndex(IntPtr dialogHwnd, List<FileJumpCandidate> candidates)
+    {
+        var zPath = FileManagerPathCollector.TryGetZOrderLinkedFolder(dialogHwnd, 2);
+        if (string.IsNullOrEmpty(zPath)) return 0;
+        var idx = candidates.FindIndex(c =>
+            string.Equals(c.Path, zPath, StringComparison.OrdinalIgnoreCase));
+        return idx >= 0 ? idx : 0;
+    }
+
+    private void ClearFileJumpDoubleTapState()
+    {
+        CancelFileJumpPickerDelay();
+        _fileJumpLastHotkeyTick = 0;
+        _fileJumpLastDialogHwnd = IntPtr.Zero;
+    }
+
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0 && _isPopupVisible && wParam == (IntPtr)Win32.WM_KEYDOWN)
         {
+            if (_activeFileJumpPicker != null)
+                return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
             var kb = Marshal.PtrToStructure<Win32.KBDLLHOOKSTRUCT>(lParam);
 
             if (PhraseEditPopup.IsOpen)

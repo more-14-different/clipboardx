@@ -14,6 +14,13 @@ public class AppSettings
     public int MaxItems { get; set; } = 2000;
     public uint HotkeyModifiers { get; set; } = Win32.MOD_CONTROL;
     public uint HotkeyKey { get; set; } = Win32.VK_OEM_3;
+
+    /// <summary>「打开/保存」对话框中跳转到文件夹的全局快捷键（默认 Ctrl+G）。</summary>
+    public uint FileJumpHotkeyModifiers { get; set; } = Win32.MOD_CONTROL;
+    public uint FileJumpHotkeyKey { get; set; } = Win32.VK_G;
+
+    /// <summary>多候选时跳转列表弹出前的延时（毫秒）；0 表示立即弹出。</summary>
+    public int FileJumpPickerShowDelayMs { get; set; } = 500;
     public string Theme { get; set; } = "System";
     public string PopupPosition { get; set; } = "Caret";
     public double PopupOpacity { get; set; } = 0.95;
@@ -24,18 +31,25 @@ public class AppSettings
     public string PanelModifierKey { get; set; } = "Ctrl";
     public List<QuickPasteEntry> QuickPastes { get; set; } = new();
 
-    public string HotkeyDisplayName
+    /// <summary>Ctrl+G 跳转列表顶部展示的收藏目录（Phrase 为关键词/别名，供检索）。</summary>
+    public List<FolderFavoriteEntry> FolderFavorites { get; set; } = new();
+
+    /// <summary>最近一次在「打开/保存」对话框中记录到的文件夹，供 Ctrl+G 跳转。</summary>
+    public string LastFileDialogFolder { get; set; } = "";
+
+    public string HotkeyDisplayName => FormatHotkey(HotkeyModifiers, HotkeyKey);
+
+    public string FileJumpHotkeyDisplayName => FormatHotkey(FileJumpHotkeyModifiers, FileJumpHotkeyKey);
+
+    public static string FormatHotkey(uint modifiers, uint key)
     {
-        get
-        {
-            var parts = new List<string>();
-            if ((HotkeyModifiers & Win32.MOD_CONTROL) != 0) parts.Add("Ctrl");
-            if ((HotkeyModifiers & Win32.MOD_SHIFT) != 0) parts.Add("Shift");
-            if ((HotkeyModifiers & Win32.MOD_ALT) != 0) parts.Add("Alt");
-            if ((HotkeyModifiers & Win32.MOD_WIN) != 0) parts.Add("Win");
-            parts.Add(VkToName(HotkeyKey));
-            return string.Join("+", parts);
-        }
+        var parts = new List<string>();
+        if ((modifiers & Win32.MOD_CONTROL) != 0) parts.Add("Ctrl");
+        if ((modifiers & Win32.MOD_SHIFT) != 0) parts.Add("Shift");
+        if ((modifiers & Win32.MOD_ALT) != 0) parts.Add("Alt");
+        if ((modifiers & Win32.MOD_WIN) != 0) parts.Add("Win");
+        parts.Add(VkToName(key));
+        return string.Join("+", parts);
     }
 
     private static string VkToName(uint vk) => vk switch
@@ -73,6 +87,8 @@ public class AppSettings
                     // 旧版 settings.json 无此字段时 Json 反序列化为 false，产品默认应为开启
                     if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
                         settings.RunAtStartup = true;
+                    if (settings.FolderFavorites == null)
+                        settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     return settings;
                 }
             }
@@ -85,6 +101,8 @@ public class AppSettings
                     var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new();
                     if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
                         settings.RunAtStartup = true;
+                    if (settings.FolderFavorites == null)
+                        settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.Save();
                     return settings;
                 }
@@ -110,6 +128,9 @@ public class AppSettings
         MaxItems = MaxItems,
         HotkeyModifiers = HotkeyModifiers,
         HotkeyKey = HotkeyKey,
+        FileJumpHotkeyModifiers = FileJumpHotkeyModifiers,
+        FileJumpHotkeyKey = FileJumpHotkeyKey,
+        FileJumpPickerShowDelayMs = FileJumpPickerShowDelayMs,
         Theme = Theme,
         PopupPosition = PopupPosition,
         PopupOpacity = PopupOpacity,
@@ -117,6 +138,8 @@ public class AppSettings
         RunAtStartup = RunAtStartup,
         PreviewMaxLines = PreviewMaxLines,
         PanelModifierKey = PanelModifierKey,
-        QuickPastes = QuickPastes.Select(q => new QuickPasteEntry { Phrase = q.Phrase, Content = q.Content }).ToList()
+        QuickPastes = QuickPastes.Select(q => new QuickPasteEntry { Phrase = q.Phrase, Content = q.Content }).ToList(),
+        FolderFavorites = FolderFavorites.Select(f => new FolderFavoriteEntry { Phrase = f.Phrase, Path = f.Path }).ToList(),
+        LastFileDialogFolder = LastFileDialogFolder
     };
 }

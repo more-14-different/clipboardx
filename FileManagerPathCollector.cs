@@ -1,0 +1,417 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+namespace ClipboardManager;
+
+/// <summary>
+/// 枚举资源管理器 / Total Commander / XYplorer / Directory Opus 等窗口的路径；
+/// 思路对齐 QuickSwitch（<see href="https://github.com/gepruts/QuickSwitch"/>）的 ShowMenu / Get_Zfolder。
+/// </summary>
+internal static class FileManagerPathCollector
+{
+    private const int TcMsg = 1075;
+    private const int TcmCopySrcPathToClip = 2029;
+    private const int TcmCopyTrgPathToClip = 2030;
+    private const nint XyCopyDataId = 0x400001;
+
+    private static List<IntPtr> GetTopLevelZOrderTopFirst()
+    {
+        var r = new List<IntPtr>();
+        for (var h = Win32.GetTopWindow(IntPtr.Zero);
+             h != IntPtr.Zero;
+             h = Win32.GetWindow(h, Win32.GW_HWNDNEXT))
+        {
+            if (Win32.IsWindow(h) && Win32.IsWindowVisible(h))
+                r.Add(h);
+        }
+        return r;
+    }
+
+    /// <summary>与 QuickSwitch Get_Zfolder 相同：对话框在 Z 序中向下偏移 <paramref name="zDelta"/> 个窗口后尝试取路径（默认 2：对话框→宿主→文件管理器）。</summary>
+    public static string? TryGetZOrderLinkedFolder(IntPtr dialogHwnd, int zDelta = 2)
+    {
+        if (dialogHwnd == IntPtr.Zero || zDelta < 1) return null;
+        var z = GetTopLevelZOrderTopFirst();
+        var idx = z.IndexOf(dialogHwnd);
+        if (idx < 0) return null;
+        var j = idx + zDelta;
+        if (j >= z.Count) return null;
+        return TryGetFolderForManagerHwnd(z[j]);
+    }
+
+    /// <summary>按 Z 序遍历顶层窗口，收集各文件管理器当前路径；末尾可附加「记忆路径」。</summary>
+    public static List<FileJumpCandidate> CollectCandidates(IntPtr dialogHwnd, string? memoryFolder, int zDelta = 2)
+    {
+        var list = new List<FileJumpCandidate>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string label, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            try
+            {
+                if (!Directory.Exists(path)) return;
+                var n = Path.GetFullPath(path);
+                if (!seen.Add(n)) return;
+                list.Add(new FileJumpCandidate(label, n));
+            }
+            catch { /* ignore */ }
+        }
+
+        if (TryGetZOrderLinkedFolder(dialogHwnd, zDelta) is { } zHint)
+            Add("Z 序推测", zHint);
+
+        string? opusXml = null;
+        foreach (var h in GetTopLevelZOrderTopFirst())
+        {
+            var cls = Win32.GetWindowClassName(h);
+            switch (cls)
+            {
+                case "TTOTAL_CMD":
+                    if (TryTotalCommanderPathFromClip(h, TcmCopySrcPathToClip, out var tc1))
+                        Add("Total Commander (源)", tc1);
+                    if (TryTotalCommanderPathFromClip(h, TcmCopyTrgPathToClip, out var tc2))
+                        Add("Total Commander (目标)", tc2);
+                    break;
+                case "ThunderRT6FormDC":
+                    if (TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var xya))
+                        Add("XYplorer (活动)", xya);
+                    if (TryXyplorerPathFromClip(h, "::copytext get('path', i);", out var xyi))
+                        Add("XYplorer (非活动)", xyi);
+                    break;
+                case "dopus.lister":
+                    opusXml ??= TryRunDopusInfoXml(h);
+                    foreach (var (pl, pp) in ParseDopusListerPaths(opusXml, h))
+                        Add(pl, pp);
+                    break;
+                case "CabinetWClass":
+                case "ExploreWClass":
+                    if (TryGetExplorerPathForHwnd(h) is { } ex)
+                        Add("资源管理器", ex);
+                    break;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(memoryFolder))
+            Add("记忆路径", memoryFolder);
+
+        return list;
+    }
+
+    private static string? TryGetFolderForManagerHwnd(IntPtr h)
+    {
+        return Win32.GetWindowClassName(h) switch
+        {
+            "TTOTAL_CMD" => TryTotalCommanderPathFromClip(h, TcmCopySrcPathToClip, out var p) ? p : null,
+            "ThunderRT6FormDC" => TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var x) ? x : null,
+            "CabinetWClass" or "ExploreWClass" => TryGetExplorerPathForHwnd(h),
+            "dopus.lister" => ParseDopusListerPaths(TryRunDopusInfoXml(h), h).Select(t => t.path).FirstOrDefault(),
+            _ => null
+        };
+    }
+
+    private static bool TryTotalCommanderPathFromClip(IntPtr tcHwnd, int commandId, out string path)
+    {
+        path = "";
+        ClipboardGate.Enter();
+        try
+        {
+            string? backup = null;
+            try
+            {
+                if (System.Windows.Clipboard.ContainsText()) backup = System.Windows.Clipboard.GetText();
+            }
+            catch { /* ignore */ }
+
+            try { System.Windows.Clipboard.Clear(); } catch { /* ignore */ }
+
+            Win32.SendMessage(tcHwnd, TcMsg, (IntPtr)commandId, IntPtr.Zero);
+            Thread.Sleep(90);
+            try
+            {
+                path = System.Windows.Clipboard.GetText()?.Trim() ?? "";
+            }
+            catch { path = ""; }
+
+            try
+            {
+                if (backup != null) System.Windows.Clipboard.SetText(backup);
+                else System.Windows.Clipboard.Clear();
+            }
+            catch { /* ignore */ }
+
+            return Directory.Exists(path);
+        }
+        finally
+        {
+            ClipboardGate.Exit();
+        }
+    }
+
+    private static bool TryXyplorerPathFromClip(IntPtr xyHwnd, string script, out string path)
+    {
+        path = "";
+        ClipboardGate.Enter();
+        try
+        {
+            string? backup = null;
+            try
+            {
+                if (System.Windows.Clipboard.ContainsText()) backup = System.Windows.Clipboard.GetText();
+            }
+            catch { /* ignore */ }
+
+            try { System.Windows.Clipboard.Clear(); } catch { /* ignore */ }
+
+            SendXyplorerCopyData(xyHwnd, script);
+            Thread.Sleep(120);
+            try
+            {
+                path = System.Windows.Clipboard.GetText()?.Trim() ?? "";
+            }
+            catch { path = ""; }
+
+            try
+            {
+                if (backup != null) System.Windows.Clipboard.SetText(backup);
+                else System.Windows.Clipboard.Clear();
+            }
+            catch { /* ignore */ }
+
+            return Directory.Exists(path);
+        }
+        finally
+        {
+            ClipboardGate.Exit();
+        }
+    }
+
+    private static void SendXyplorerCopyData(IntPtr xyHwnd, string message)
+    {
+        var bytes = Encoding.Unicode.GetBytes(message + "\0");
+        var ptr = Marshal.AllocHGlobal(bytes.Length);
+        try
+        {
+            Marshal.Copy(bytes, 0, ptr, bytes.Length);
+            var cds = new Win32.COPYDATASTRUCT
+            {
+                dwData = (IntPtr)XyCopyDataId,
+                cbData = bytes.Length,
+                lpData = ptr
+            };
+            Win32.SendMessage(xyHwnd, Win32.WM_COPYDATA, IntPtr.Zero, ref cds);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
+
+    /// <summary>
+    /// 通过 Shell.Application.Windows 取资源管理器路径。COM 报告的 HWND 常与顶层 CabinetWClass 不完全相同，
+    /// 故用 GetAncestor / IsChild / 父链匹配（对齐 QuickSwitch 的 <c>_Exp.hwnd</c> 实测差异）。
+    /// </summary>
+    private static string? TryGetExplorerPathForHwnd(IntPtr explorerFrameHwnd)
+    {
+        if (explorerFrameHwnd == IntPtr.Zero) return null;
+        Type? t = Type.GetTypeFromProgID("Shell.Application");
+        if (t == null) return null;
+        object? shell = null;
+        object? windows = null;
+        try
+        {
+            shell = Activator.CreateInstance(t);
+            if (shell == null) return null;
+            windows = TryInvokeShellWindows(shell);
+            if (windows == null) return null;
+
+            var wt = windows.GetType();
+            var countObj = wt.InvokeMember("Count", BindingFlags.GetProperty, null, windows, null);
+            var count = Convert.ToInt32(countObj);
+            for (var i = 0; i < count; i++)
+            {
+                object? win = null;
+                try
+                {
+                    win = wt.InvokeMember("Item", BindingFlags.InvokeMethod, null, windows, new object[] { i });
+                    if (win == null) continue;
+                    var comHwnd = TryGetInternetExplorerHwnd(win);
+                    if (!ExplorerFrameLikelyMatches(explorerFrameHwnd, comHwnd)) continue;
+                    return ReadShellWindowPath(win);
+                }
+                finally
+                {
+                    if (win != null) Marshal.ReleaseComObject(win);
+                }
+            }
+        }
+        catch { return null; }
+        finally
+        {
+            if (windows != null) Marshal.ReleaseComObject(windows);
+            if (shell != null) Marshal.ReleaseComObject(shell);
+        }
+
+        return null;
+    }
+
+    private static object? TryInvokeShellWindows(object shell)
+    {
+        var shellType = shell.GetType();
+        try
+        {
+            return shellType.InvokeMember("Windows", BindingFlags.InvokeMethod, null, shell, null);
+        }
+        catch { /* 部分宿主上 Windows 为属性 */ }
+
+        try
+        {
+            return shellType.InvokeMember("Windows", BindingFlags.GetProperty, null, shell, null);
+        }
+        catch { return null; }
+    }
+
+    private static IntPtr TryGetInternetExplorerHwnd(object win)
+    {
+        var t = win.GetType();
+        foreach (var name in new[] { "HWND", "Hwnd" })
+        {
+            try
+            {
+                var v = t.InvokeMember(name, BindingFlags.GetProperty | BindingFlags.IgnoreCase, null, win, null);
+                if (v == null) continue;
+                var p = ComObjectToIntPtr(v);
+                if (p != IntPtr.Zero) return p;
+            }
+            catch { /* ignore */ }
+        }
+        return IntPtr.Zero;
+    }
+
+    private static IntPtr ComObjectToIntPtr(object v)
+    {
+        if (v is IntPtr p) return p;
+        try
+        {
+            return new IntPtr(Convert.ToInt64(v, System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch
+        {
+            return IntPtr.Zero;
+        }
+    }
+
+    private static bool ExplorerFrameLikelyMatches(IntPtr explorerFrameHwnd, IntPtr shellReportedHwnd)
+    {
+        if (explorerFrameHwnd == IntPtr.Zero || shellReportedHwnd == IntPtr.Zero) return false;
+        if (explorerFrameHwnd == shellReportedHwnd) return true;
+        if (Win32.IsChild(explorerFrameHwnd, shellReportedHwnd)) return true;
+        if (Win32.GetAncestor(shellReportedHwnd, Win32.GA_ROOT) == explorerFrameHwnd) return true;
+        for (var w = shellReportedHwnd; w != IntPtr.Zero; w = Win32.GetParent(w))
+        {
+            if (w == explorerFrameHwnd) return true;
+        }
+        var frameRoot = Win32.GetAncestor(explorerFrameHwnd, Win32.GA_ROOT);
+        var shellRoot = Win32.GetAncestor(shellReportedHwnd, Win32.GA_ROOT);
+        if (frameRoot != IntPtr.Zero && frameRoot == shellRoot)
+            return true;
+        return false;
+    }
+
+    private static string? ReadShellWindowPath(object win)
+    {
+        object? doc = null;
+        object? folder = null;
+        object? self = null;
+        try
+        {
+            doc = win.GetType().InvokeMember("Document", BindingFlags.GetProperty, null, win, null);
+            if (doc == null) return null;
+            folder = doc.GetType().InvokeMember("Folder", BindingFlags.GetProperty, null, doc, null);
+            if (folder == null) return null;
+            self = folder.GetType().InvokeMember("Self", BindingFlags.GetProperty, null, folder, null);
+            if (self == null) return null;
+            var path = self.GetType().InvokeMember("Path", BindingFlags.GetProperty, null, self, null);
+            return path?.ToString();
+        }
+        catch { return null; }
+        finally
+        {
+            if (self != null) Marshal.ReleaseComObject(self);
+            if (folder != null) Marshal.ReleaseComObject(folder);
+            if (doc != null) Marshal.ReleaseComObject(doc);
+        }
+    }
+
+    private static string? TryRunDopusInfoXml(IntPtr anyListerHwnd)
+    {
+        if (!TryGetProcessImagePath(anyListerHwnd, out var exe)) return null;
+        var dir = Path.GetDirectoryName(exe);
+        if (string.IsNullOrEmpty(dir)) return null;
+        var rt = Path.Combine(dir, "dopusrt.exe");
+        if (!File.Exists(rt)) return null;
+
+        var temp = Path.Combine(Path.GetTempPath(), "ClipboardX-dopus-" + Guid.NewGuid().ToString("N") + ".xml");
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = rt,
+                ArgumentList = { "/info", temp, "paths" },
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            p?.WaitForExit(5000);
+            if (!File.Exists(temp)) return null;
+            return File.ReadAllText(temp);
+        }
+        catch { return null; }
+        finally
+        {
+            try { File.Delete(temp); } catch { /* ignore */ }
+        }
+    }
+
+    private static IEnumerable<(string label, string path)> ParseDopusListerPaths(string? xml, IntPtr listerHwnd)
+    {
+        if (string.IsNullOrEmpty(xml)) yield break;
+        var idVariants = new HashSet<string>(StringComparer.Ordinal);
+        idVariants.Add(((nint)listerHwnd).ToString());
+        idVariants.Add(unchecked((uint)(nint)listerHwnd).ToString());
+        foreach (var (state, label) in new[] { ("1", "Directory Opus (活动)"), ("2", "Directory Opus (被动)") })
+        {
+            foreach (var id in idVariants)
+            {
+                var pattern =
+                    $@"(?is)lister\s*=\s*""{Regex.Escape(id)}""[^>]*tab_state\s*=\s*""{state}""[^>]*>\s*([^<]+?)\s*</path>";
+                var m = Regex.Match(xml, pattern);
+                if (m.Success && Directory.Exists(m.Groups[1].Value.Trim()))
+                {
+                    yield return (label, m.Groups[1].Value.Trim());
+                    break;
+                }
+            }
+        }
+    }
+
+    private static bool TryGetProcessImagePath(IntPtr hwnd, out string path)
+    {
+        path = "";
+        Win32.GetWindowThreadProcessId(hwnd, out var pid);
+        var hProc = Win32.OpenProcess(Win32.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (hProc == IntPtr.Zero) return false;
+        try
+        {
+            var sb = new StringBuilder(1024);
+            return Win32.GetModuleFileNameEx(hProc, IntPtr.Zero, sb, sb.Capacity) > 0
+                   && File.Exists(path = sb.ToString());
+        }
+        finally
+        {
+            Win32.CloseHandle(hProc);
+        }
+    }
+}

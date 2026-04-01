@@ -11,6 +11,9 @@ public partial class SettingsWindow : Window
     private uint _pendingModifiers;
     private uint _pendingKey;
     private bool _isRecordingHotkey;
+    private uint _pendingFileJumpModifiers;
+    private uint _pendingFileJumpKey;
+    private bool _isRecordingFileJumpHotkey;
     private string _pendingTheme;
     private string _pendingPosition;
     private double _pendingOpacity;
@@ -33,6 +36,11 @@ public partial class SettingsWindow : Window
         _pendingModifiers = settings.HotkeyModifiers;
         _pendingKey = settings.HotkeyKey;
         HotkeyText.Text = settings.HotkeyDisplayName;
+
+        _pendingFileJumpModifiers = settings.FileJumpHotkeyModifiers;
+        _pendingFileJumpKey = settings.FileJumpHotkeyKey;
+        FileJumpHotkeyText.Text = settings.FileJumpHotkeyDisplayName;
+        FileJumpDelayMsBox.Text = settings.FileJumpPickerShowDelayMs.ToString();
 
         _pendingTheme = settings.Theme;
         ThemeText.Text = ThemeDisplayName(_pendingTheme);
@@ -116,6 +124,51 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void FileJumpHotkeyBox_Click(object sender, RoutedEventArgs e)
+    {
+        _isRecordingFileJumpHotkey = true;
+        FileJumpHotkeyText.Text = "按下快捷键…";
+        FileJumpHotkeyText.Foreground = (System.Windows.Media.Brush)FindResource("AccentBg");
+        FileJumpHotkeyBox.Focus();
+    }
+
+    private void FileJumpHotkeyBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_isRecordingFileJumpHotkey) return;
+        e.Handled = true;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift
+            or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin)
+            return;
+
+        var modifiers = Keyboard.Modifiers;
+        if (modifiers == ModifierKeys.None) return;
+
+        uint mod = 0;
+        if (modifiers.HasFlag(ModifierKeys.Control)) mod |= Win32.MOD_CONTROL;
+        if (modifiers.HasFlag(ModifierKeys.Shift)) mod |= Win32.MOD_SHIFT;
+        if (modifiers.HasFlag(ModifierKeys.Alt)) mod |= Win32.MOD_ALT;
+        if (modifiers.HasFlag(ModifierKeys.Windows)) mod |= Win32.MOD_WIN;
+
+        _pendingFileJumpModifiers = mod;
+        _pendingFileJumpKey = (uint)KeyInterop.VirtualKeyFromKey(key);
+        _isRecordingFileJumpHotkey = false;
+
+        FileJumpHotkeyText.Text = AppSettings.FormatHotkey(_pendingFileJumpModifiers, _pendingFileJumpKey);
+        FileJumpHotkeyText.Foreground = (System.Windows.Media.Brush)FindResource("PrimaryText");
+    }
+
+    private void FileJumpHotkeyBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_isRecordingFileJumpHotkey)
+        {
+            _isRecordingFileJumpHotkey = false;
+            FileJumpHotkeyText.Text = AppSettings.FormatHotkey(_pendingFileJumpModifiers, _pendingFileJumpKey);
+            FileJumpHotkeyText.Foreground = (System.Windows.Media.Brush)FindResource("PrimaryText");
+        }
+    }
+
     private void ThemeCycle_Click(object sender, RoutedEventArgs e)
     {
         _pendingTheme = _pendingTheme switch
@@ -193,9 +246,26 @@ public partial class SettingsWindow : Window
             return;
         }
 
+        if (!int.TryParse(FileJumpDelayMsBox.Text, out var jumpDelayMs) || jumpDelayMs < 0 || jumpDelayMs > 10000)
+        {
+            System.Windows.MessageBox.Show("跳转列表延时应在 0 ~ 10000 毫秒之间（0 表示立即弹出）", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (_pendingModifiers == _pendingFileJumpModifiers && _pendingKey == _pendingFileJumpKey)
+        {
+            System.Windows.MessageBox.Show("呼出快捷键与文件对话框跳转键不能相同。", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         _settings.MaxItems = maxItems;
         _settings.HotkeyModifiers = _pendingModifiers;
         _settings.HotkeyKey = _pendingKey;
+        _settings.FileJumpHotkeyModifiers = _pendingFileJumpModifiers;
+        _settings.FileJumpHotkeyKey = _pendingFileJumpKey;
+        _settings.FileJumpPickerShowDelayMs = jumpDelayMs;
         _settings.Theme = _pendingTheme;
         _settings.PopupPosition = _pendingPosition;
         _settings.PopupOpacity = _pendingOpacity;
