@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -75,6 +76,8 @@ public partial class App : Application
             Dispatcher.Invoke(OpenSettings));
         menu.Items.Add("关于", null, (_, _) =>
             Dispatcher.Invoke(ShowAboutDialog));
+        menu.Items.Add("检查更新…", null, (_, _) =>
+            _ = CheckForUpdatesAsync());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("卸载…", null, (_, _) =>
             Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
@@ -102,6 +105,109 @@ public partial class App : Application
     {
         if (_trayIcon != null)
             _trayIcon.Text = $"ClipboardX ({_settings.HotkeyDisplayName})";
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            GitHubUpdateService.LatestReleaseInfo info;
+            try
+            {
+                info = await GitHubUpdateService.FetchLatestReleaseAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(
+                    $"无法获取更新信息（请检查网络或稍后重试）：\n{ex.Message}",
+                    "检查更新",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            var current = AppInfo.DisplayVersion;
+            if (!GitHubUpdateService.IsRemoteNewerThanCurrent(info.TagName, current))
+            {
+                System.Windows.MessageBox.Show(
+                    $"当前已是最新版本（{current}）。",
+                    "检查更新",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var asset = info.ChosenAsset;
+            var note = GitHubUpdateService.TruncateNote(info.Body);
+            var verRemote = info.TagName.TrimStart('v', 'V');
+            var installDir = PerUserInstall.GetUpdateInstallDirectory();
+            var pkgHint = asset.IsNoRuntimeVariant
+                ? "已按当前运行方式匹配：**框架依赖**（与本机 dotnet 共享运行时，包较小）。"
+                : "已按当前运行方式匹配：**自带运行时**（单文件内含 .NET，包较大）。";
+            var prompt =
+                $"发现新版本 {verRemote}（当前 {current}）。\n\n" +
+                (note.Length > 0 ? $"说明：{note}\n\n" : "") +
+                pkgHint + "\n\n" +
+                $"将下载：{asset.Name}\n大小约 {GitHubUpdateService.FormatSizeMb(asset.Size)}\n\n" +
+                $"安装目录：\n{installDir}\n\n" +
+                "程序将关闭后自动替换并重新启动。\n是否继续？";
+
+            if (System.Windows.MessageBox.Show(
+                    prompt,
+                    "ClipboardX 更新",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            var staging = Path.Combine(Path.GetTempPath(), "ClipboardX-update-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(staging);
+            var zipPath = Path.Combine(staging, "release.zip");
+            var extractDir = Path.Combine(staging, "extract");
+            var ps1 = Path.Combine(staging, "apply.ps1");
+            var updateLaunched = false;
+            try
+            {
+                await GitHubUpdateService.RunWithMarqueeAsync(
+                    "正在从 GitHub 下载更新…",
+                    () => GitHubUpdateService.DownloadToFileAsync(asset.DownloadUrl, zipPath));
+
+                GitHubUpdateService.ExtractZipToDirectory(zipPath, extractDir);
+
+                if (!File.Exists(Path.Combine(extractDir, "ClipboardX.exe")))
+                {
+                    System.Windows.MessageBox.Show(
+                        "压缩包内未找到 ClipboardX.exe，已中止。",
+                        "更新",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (System.Windows.MessageBox.Show(
+                        "下载完成。是否立即退出并完成安装？（将自动重启 ClipboardX）",
+                        "更新",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Question) != MessageBoxResult.Yes)
+                    return;
+
+                GitHubUpdateService.LaunchDeferredReplaceAndRestart(extractDir, installDir, staging, ps1);
+                updateLaunched = true;
+                Shutdown();
+            }
+            finally
+            {
+                if (!updateLaunched && Directory.Exists(staging))
+                    GitHubUpdateService.TryDeleteDirectory(staging);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(
+                $"更新未成功：\n{ex.Message}",
+                "检查更新",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private static void ShowAboutDialog()

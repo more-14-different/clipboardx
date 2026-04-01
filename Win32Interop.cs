@@ -66,6 +66,16 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT lpPoint);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    public static string GetWindowClassName(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return "";
+        var sb = new StringBuilder(256);
+        return GetClassName(hWnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
+    }
+
     [DllImport("user32.dll")]
     public static extern IntPtr GetFocus();
 

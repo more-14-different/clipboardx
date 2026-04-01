@@ -75,6 +75,15 @@ public static class PerUserInstall
         return string.Equals(current, installed, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>在线更新时覆盖此目录（与 PerUserInstall 安装目录一致，或为当前便携运行目录）。</summary>
+    public static string GetUpdateInstallDirectory()
+    {
+        if (IsRunningFromInstallLocation())
+            return InstallDirectory;
+        var dir = Path.GetDirectoryName(Environment.ProcessPath);
+        return string.IsNullOrEmpty(dir) ? InstallDirectory : NormalizePath(dir);
+    }
+
     public static bool HasUninstallArgument(string[] args) =>
         args.Any(static a =>
             string.Equals(a, "--uninstall", StringComparison.OrdinalIgnoreCase) ||

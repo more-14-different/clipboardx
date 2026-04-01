@@ -397,7 +397,11 @@ public partial class PopupWindow : Window
 
     #region Search & Filter
 
-    private void RefreshFilter()
+    /// <param name="preferSelectListIndex">
+    /// 刷新后希望选中的行（0-based，对应当前列表）。删除条目时传「被删项在原列表中的索引」，则选中同一位置（由下一项顶替），删最后一项则选中新末项。
+    /// 其他场景省略或传 null，默认选中第 0 条。
+    /// </param>
+    private void RefreshFilter(int? preferSelectListIndex = null)
     {
         ClearPendingDelete();
         _displayItems.Clear();
@@ -428,7 +432,13 @@ public partial class PopupWindow : Window
 
         UpdateEmptyState();
         if (_displayItems.Count > 0)
-            ItemsList.SelectedIndex = 0;
+        {
+            int sel = preferSelectListIndex.HasValue
+                ? Math.Clamp(preferSelectListIndex.Value, 0, _displayItems.Count - 1)
+                : 0;
+            ItemsList.SelectedIndex = sel;
+            ItemsList.ScrollIntoView(ItemsList.SelectedItem);
+        }
     }
 
     private void UpdateSearchUI()
@@ -537,6 +547,14 @@ public partial class PopupWindow : Window
             return;
         }
 
+        // 资源管理器驱动的桌面（壁纸/图标层）：无可靠文本光标，跟随鼠标更符合直觉
+        if (IsExplorerDesktopForeground(_targetWindow))
+        {
+            Win32.GetCursorPos(out var deskPt);
+            SetPositionWithOffset(deskPt.X + 8, deskPt.Y + 20);
+            return;
+        }
+
         var fgThread = Win32.GetWindowThreadProcessId(_targetWindow, out _);
         var gti = new Win32.GUITHREADINFO { cbSize = Marshal.SizeOf<Win32.GUITHREADINFO>() };
 
@@ -580,6 +598,15 @@ public partial class PopupWindow : Window
 
         Win32.GetCursorPos(out var cursor);
         SetPositionWithOffset(cursor.X + 8, cursor.Y + 20);
+    }
+
+    /// <summary>当前前台是否为 Windows 桌面（Progman/WorkerW），即点击壁纸或桌面图标时的焦点窗体。</summary>
+    private static bool IsExplorerDesktopForeground(IntPtr foregroundHwnd)
+    {
+        if (foregroundHwnd == IntPtr.Zero) return false;
+        var cls = Win32.GetWindowClassName(foregroundHwnd);
+        return cls.Equals("Progman", StringComparison.OrdinalIgnoreCase)
+               || cls.Equals("WorkerW", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryGetCaretByAutomation(out double x, out double y)
@@ -1245,8 +1272,9 @@ public partial class PopupWindow : Window
             ClearPendingDelete();
         if (entry.IsQuickPaste)
             _quickPastes.RemoveAll(q => q.Content == entry.TextContent);
+        var removedListIndex = _displayItems.IndexOf(entry);
         _allItems.Remove(entry);
-        RefreshFilter();
+        RefreshFilter(removedListIndex >= 0 ? removedListIndex : null);
         if (entry.IsQuickPaste) SaveQuickPastes();
     }
 

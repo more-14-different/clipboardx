@@ -10,6 +10,7 @@
    - **`ClipboardX-x.x.x-win-x64-no-runtime.zip`** — 体积小，需本机已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
    - **`ClipboardX-x.x.x-win-x64-self-contained.zip`** — 自带运行时，无需单独安装 .NET
 2. 解压后双击 **`ClipboardX.exe`** 运行。若从压缩包等临时目录启动，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并在「应用和功能」中注册卸载项；托盘菜单 **关于** 可查看当前版本与主页链接。
+3. **检查更新**：托盘图标右键 → **检查更新…**，会通过 GitHub Releases 比对版本；若有新版，会根据**当前进程是否使用本机已安装的 .NET**（检测 `System.Private.CoreLib` 是否从 `dotnet\shared\Microsoft.NETCore.App` 加载）自动选择 **no-runtime** 或 **self-contained** zip，缺一种则回退另一种；关闭程序后由脚本覆盖安装目录并自动重启。需可访问 GitHub（api.github.com 与 release 资源域名）。
 
 ### 首次运行出现「Windows 已保护你的电脑」（SmartScreen）
 
