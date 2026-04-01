@@ -27,6 +27,13 @@ public class AppSettings
     /// 关闭后仅走地址栏/键入模拟，兼容部分杀软或宿主拦截注入的环境；WPS 等自定义对话框始终不注入。
     /// </summary>
     public bool EnableShellNavigateInject { get; set; } = true;
+
+    /// <summary>
+    /// 打开/保存对话框成为前台后，第一次在该对话框内按下鼠标左键时，自动跳转到候选路径列表的第一条（与 Ctrl+G 列表顺序一致）；
+    /// 每个对话框顶层窗口存活期内仅成功自动跳转一次。
+    /// </summary>
+    public bool FileJumpAutoOnFirstClick { get; set; } = true;
+
     public string Theme { get; set; } = "System";
     public string PopupPosition { get; set; } = "Caret";
     public double PopupOpacity { get; set; } = 0.95;
@@ -95,6 +102,8 @@ public class AppSettings
                         settings.RunAtStartup = true;
                     if (!doc.RootElement.TryGetProperty(nameof(EnableShellNavigateInject), out _))
                         settings.EnableShellNavigateInject = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoOnFirstClick), out _))
+                        settings.FileJumpAutoOnFirstClick = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     return settings;
@@ -111,6 +120,8 @@ public class AppSettings
                         settings.RunAtStartup = true;
                     if (!doc.RootElement.TryGetProperty(nameof(EnableShellNavigateInject), out _))
                         settings.EnableShellNavigateInject = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoOnFirstClick), out _))
+                        settings.FileJumpAutoOnFirstClick = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.Save();
@@ -142,6 +153,7 @@ public class AppSettings
         FileJumpHotkeyKey = FileJumpHotkeyKey,
         FileJumpPickerShowDelayMs = FileJumpPickerShowDelayMs,
         EnableShellNavigateInject = EnableShellNavigateInject,
+        FileJumpAutoOnFirstClick = FileJumpAutoOnFirstClick,
         Theme = Theme,
         PopupPosition = PopupPosition,
         PopupOpacity = PopupOpacity,

@@ -18,7 +18,7 @@
 
 ## 下载与安装
 
-1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在 Assets 中选 zip（版本号以发布页为准，例如 **1.1.3**）：
+1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在 Assets 中选 zip（版本号以发布页为准，例如 **1.1.4**）：
    - **`ClipboardX-*-win-x64-no-runtime.zip`** — 体积小，需已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
    - **`ClipboardX-*-win-x64-self-contained.zip`** — 自带运行时，无需单独装 .NET
 2. 解压后运行 **`ClipboardX.exe`**。从临时目录启动时，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并可在「应用和功能」中卸载；托盘 **关于** 可查看版本与主页。
@@ -40,7 +40,7 @@
 - **弹窗位置** — 文本光标或鼠标附近（可配置）  
 - **去重** — 重复内容提升到顶部  
 - **主题** — 跟随系统 / 亮 / 暗（Catppuccin Mocha）  
-- **配置** — 写入 `%AppData%\ClipboardX`；从旧名 **ClipboardManager** 迁移时会带上 `settings.json`  
+- **配置** — 设置写入 `%AppData%\ClipboardX`（从旧名 **ClipboardManager** 迁移时会带上 `settings.json`）；**普通剪贴板历史**持久化在 `%LocalAppData%\ClipboardX\clipboard_history.db`（SQLite）  
 - **文件对话框跳转** — 见下节（默认 **Ctrl+G**，勿与呼出剪贴板热键重复）
 
 ## 文件对话框跳转
@@ -63,6 +63,7 @@
 | 仅 1 条候选 | **直接跳转**，不弹列表 |
 | 多条候选、延时大于 0 ms | 先延时再弹列表；**延时内再按一次同一快捷键** → 直接跳当前预选项 |
 | 多条候选、延时为 0 | **立即**弹列表 |
+| **点击后自动跳转**（设置默认开） | 对话框成为前台后，**第一次**在框内点左键即按列表**首条**路径跳转；**同一对话框窗口存活期内只自动跳一次**（关掉再开才再来），手动 **Ctrl+G** 不受影响 |
 
 **路径来源（摘录）：** 资源管理器；**Total Commander / XYplorer / Directory Opus**（与 [QuickSwitch](https://github.com/gepruts/QuickSwitch) 同类专用通道）；以及 FreeCommander、Double Commander、OneCommander 等**白名单进程**上的**浅层 UI 自动化**（无官方 API 时尽力而为，双栏可能只取一侧）；另含**记忆的上次路径**、列表**收藏**。无任何路径则本次按键无效——可先在外部管理器进到目标目录再试。
 

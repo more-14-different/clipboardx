@@ -20,6 +20,7 @@ public partial class SettingsWindow : Window
     private bool _pendingHideOnClick;
     private bool _pendingRunAtStartup;
     private bool _pendingEnableShellNavigateInject;
+    private bool _pendingFileJumpAutoOnFirstClick;
     private string _pendingModifierKey;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
@@ -61,6 +62,9 @@ public partial class SettingsWindow : Window
 
         _pendingEnableShellNavigateInject = settings.EnableShellNavigateInject;
         ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
+
+        _pendingFileJumpAutoOnFirstClick = settings.FileJumpAutoOnFirstClick;
+        FileJumpAutoClickText.Text = _pendingFileJumpAutoOnFirstClick ? "开启" : "关闭";
 
         PreviewLinesBox.Text = settings.PreviewMaxLines.ToString();
 
@@ -209,6 +213,12 @@ public partial class SettingsWindow : Window
         ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
     }
 
+    private void FileJumpAutoClickCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingFileJumpAutoOnFirstClick = !_pendingFileJumpAutoOnFirstClick;
+        FileJumpAutoClickText.Text = _pendingFileJumpAutoOnFirstClick ? "开启" : "关闭";
+    }
+
     private static string ModifierDisplayName(string m) => m switch
     {
         "Alt" => "Alt",
@@ -282,6 +292,7 @@ public partial class SettingsWindow : Window
         _settings.HideOnSameAppClick = _pendingHideOnClick;
         _settings.RunAtStartup = _pendingRunAtStartup;
         _settings.EnableShellNavigateInject = _pendingEnableShellNavigateInject;
+        _settings.FileJumpAutoOnFirstClick = _pendingFileJumpAutoOnFirstClick;
         _settings.PreviewMaxLines = previewLines;
         _settings.PanelModifierKey = _pendingModifierKey;
 

@@ -20,6 +20,16 @@ public class ClipboardEntry : INotifyPropertyChanged
     public bool IsQuickPaste { get; set; }
     public string? ShortcutPhrase { get; set; }
 
+    /// <summary>SQLite 主键；非持久化条目（如尚未入库或快捷短语）为 null。</summary>
+    public long? PersistedId { get; set; }
+
+    /// <summary>粘贴或置顶时更新复制时间并通知列表「时间」列刷新。</summary>
+    public void TouchCopiedTime()
+    {
+        CopiedAt = DateTime.Now;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TimeAgo)));
+    }
+
     private bool _isPendingDelete;
     /// <summary>Del 第一次按下时为 true，表示待二次确认删除（删除线提示）。</summary>
     public bool IsPendingDelete

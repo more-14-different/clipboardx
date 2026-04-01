@@ -44,6 +44,11 @@ public partial class PopupWindow : Window
     private static IntPtr s_popupMouseHookForNext;
     private static PopupWindow? s_popupMouseHookOwner;
 
+    /// <summary>「点击对话框自动跳转首条路径」专用鼠标钩，与剪贴板弹窗钩分离以便弹窗关闭后仍可监听。</summary>
+    private static readonly Win32.LowLevelMouseProc s_fileJumpAutoMouseThunk = StaticFileJumpAutoMouseProc;
+    private static IntPtr s_fileJumpAutoMouseHookForNext;
+    private static PopupWindow? s_fileJumpAutoMouseOwner;
+
     /// <summary>SetWinEventHook 同样会把托管委托交给系统；须用静态委托避免 Unhook 后晚到回调撞上已回收的实例委托。</summary>
     private static readonly Win32.WinEventDelegate s_popupWinEventThunk = StaticWinEventProc;
     private static PopupWindow? s_popupWinEventOwner;
@@ -75,6 +80,7 @@ public partial class PopupWindow : Window
     /// <summary>Show/UpdateLayout 过程中阻止 WPF 改写位置，避免先出现在 (0,0) 或顶边再跳到目标点。</summary>
     private bool _lockPopupWindowNomove;
     private List<QuickPasteEntry> _quickPastes = new();
+    private readonly ClipboardHistoryStore _historyStore = new();
     private AppSettings? _appSettings;
     private IntPtr _lastForegroundForDialogTrack = IntPtr.Zero;
 
@@ -94,6 +100,15 @@ public partial class PopupWindow : Window
     private int _fileJumpDelaySession;
     private uint _fileJumpHotkeyModifiers;
     private uint _fileJumpHotkeyKey;
+
+    private IntPtr _fileJumpAutoMouseHook;
+    /// <summary>待监听左键的文件对话框 HWND（与前台识别一致）。</summary>
+    private IntPtr _fileJumpAutoArmedDialog;
+    /// <summary>同上对话框的顶层 HWND，用于判断点击是否落在该对话框 UI 内。</summary>
+    private IntPtr _fileJumpAutoArmedRoot;
+
+    /// <summary>已对其实施过「点击后自动跳转」的对话框顶层 HWND；同一窗口存续期间仅跳转一次，避免失焦再切回后重复跳转。</summary>
+    private IntPtr _fileJumpAutoFirstJumpDoneRoot;
 
     public event Action? SettingsRequested;
 
@@ -120,6 +135,7 @@ public partial class PopupWindow : Window
         _fileJumpHotkeyModifiers = settings.FileJumpHotkeyModifiers;
         _fileJumpHotkeyKey = settings.FileJumpHotkeyKey;
 
+        LoadHistoryFromStore();
         LoadQuickPastes();
         UpdateFooterHints();
 
@@ -158,6 +174,8 @@ public partial class PopupWindow : Window
 
     public void Cleanup()
     {
+        DisarmFileJumpClickToNavigate();
+        _fileJumpAutoFirstJumpDoneRoot = IntPtr.Zero;
         UninstallKeyboardHook();
         UninstallMouseHook();
         UninstallForegroundWatcher();
@@ -206,6 +224,12 @@ public partial class PopupWindow : Window
         TrimItems();
         UpdateFooterHints();
 
+        if (!settings.FileJumpAutoOnFirstClick)
+        {
+            _fileJumpAutoFirstJumpDoneRoot = IntPtr.Zero;
+            DisarmFileJumpClickToNavigate();
+        }
+
         if (settings.HotkeyModifiers != _hotkeyModifiers || settings.HotkeyKey != _hotkeyKey)
         {
             if (!UpdateHotkey(settings.HotkeyModifiers, settings.HotkeyKey))
@@ -234,11 +258,24 @@ public partial class PopupWindow : Window
 
     public void ClearHistory()
     {
+        _historyStore.DeleteAll();
         _allItems.RemoveAll(x => !x.IsQuickPaste);
         RefreshFilter();
     }
 
     #region Quick Paste Management
+
+    private void LoadHistoryFromStore()
+    {
+        try
+        {
+            _historyStore.PruneExcess(_maxItems);
+            var batch = _historyStore.LoadNewestFirst(_maxItems);
+            for (int i = batch.Count - 1; i >= 0; i--)
+                _allItems.Insert(0, batch[i]);
+        }
+        catch { /* ignore */ }
+    }
 
     private void LoadQuickPastes()
     {
@@ -417,8 +454,10 @@ public partial class PopupWindow : Window
                 {
                     var paths = files.Cast<string>().ToArray();
                     DeduplicateFiles(paths);
-                    _allItems.Insert(0, new ClipboardEntry { Type = EntryType.Files, FilePaths = paths });
+                    var fe = new ClipboardEntry { Type = EntryType.Files, FilePaths = paths };
+                    _allItems.Insert(0, fe);
                     TrimItems();
+                    _historyStore.TryInsert(fe);
                     RefreshFilter();
                     return;
                 }
@@ -430,8 +469,10 @@ public partial class PopupWindow : Window
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     DeduplicateText(text);
-                    _allItems.Insert(0, new ClipboardEntry { Type = EntryType.Text, TextContent = text });
+                    var te = new ClipboardEntry { Type = EntryType.Text, TextContent = text };
+                    _allItems.Insert(0, te);
                     TrimItems();
+                    _historyStore.TryInsert(te);
                     RefreshFilter();
                     return;
                 }
@@ -446,12 +487,14 @@ public partial class PopupWindow : Window
                     var pngData = ClipboardEntry.EncodeToPng(image);
                     if (pngData != null)
                     {
-                        _allItems.Insert(0, new ClipboardEntry
+                        var ie = new ClipboardEntry
                         {
                             Type = EntryType.Image, ImageData = pngData,
                             ImageWidth = image.PixelWidth, ImageHeight = image.PixelHeight
-                        });
+                        };
+                        _allItems.Insert(0, ie);
                         TrimItems();
+                        _historyStore.TryInsert(ie);
                         RefreshFilter();
                     }
                 }
@@ -462,12 +505,16 @@ public partial class PopupWindow : Window
 
     private void DeduplicateText(string text)
     {
+        foreach (var x in _allItems.Where(x => x.Type == EntryType.Text && !x.IsQuickPaste && x.TextContent == text))
+            _historyStore.TryDelete(x.PersistedId);
         _allItems.RemoveAll(x => x.Type == EntryType.Text && !x.IsQuickPaste && x.TextContent == text);
     }
 
     private void DeduplicateFiles(string[] paths)
     {
         var key = string.Join("|", paths);
+        foreach (var x in _allItems.Where(x => x.Type == EntryType.Files && string.Join("|", x.FilePaths ?? []) == key))
+            _historyStore.TryDelete(x.PersistedId);
         _allItems.RemoveAll(x => x.Type == EntryType.Files && string.Join("|", x.FilePaths ?? []) == key);
     }
 
@@ -477,6 +524,7 @@ public partial class PopupWindow : Window
         while (regular.Count > _maxItems)
         {
             var last = regular[^1];
+            _historyStore.TryDelete(last.PersistedId);
             _allItems.Remove(last);
             regular.RemoveAt(regular.Count - 1);
         }
@@ -838,6 +886,15 @@ public partial class PopupWindow : Window
         return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
     }
 
+    private static IntPtr StaticFileJumpAutoMouseProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        var owner = s_fileJumpAutoMouseOwner;
+        var hhk = s_fileJumpAutoMouseHookForNext;
+        if (owner != null && hhk != IntPtr.Zero)
+            return owner.FileJumpAutoMouseHookCallback(nCode, wParam, lParam);
+        return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
+    }
+
     private void InstallKeyboardHook()
     {
         if (_keyboardHook != IntPtr.Zero) return;
@@ -957,6 +1014,8 @@ public partial class PopupWindow : Window
 
         if (FileDialogJumpHelper.IsLikelyFileDialog(hwnd))
             ScheduleSnapshotFolderFromDialog(hwnd);
+
+        Dispatcher.BeginInvoke(() => UpdateFileJumpClickToNavigateArm(hwnd));
 
         if (!_isPopupVisible) return;
         if (hwnd == _hwnd || hwnd == _targetWindow) return;
@@ -1183,6 +1242,139 @@ public partial class PopupWindow : Window
         CancelFileJumpPickerDelay();
         _fileJumpLastHotkeyTick = 0;
         _fileJumpLastDialogHwnd = IntPtr.Zero;
+    }
+
+    private void DisarmFileJumpClickToNavigate()
+    {
+        _fileJumpAutoArmedDialog = IntPtr.Zero;
+        _fileJumpAutoArmedRoot = IntPtr.Zero;
+        if (_fileJumpAutoMouseHook != IntPtr.Zero)
+        {
+            Win32.UnhookWindowsHookEx(_fileJumpAutoMouseHook);
+            _fileJumpAutoMouseHook = IntPtr.Zero;
+        }
+        if (s_fileJumpAutoMouseOwner == this)
+        {
+            s_fileJumpAutoMouseOwner = null;
+            s_fileJumpAutoMouseHookForNext = IntPtr.Zero;
+        }
+    }
+
+    private void InstallFileJumpAutoMouseHook()
+    {
+        if (_fileJumpAutoMouseHook != IntPtr.Zero) return;
+        s_fileJumpAutoMouseOwner = this;
+        _fileJumpAutoMouseHook = Win32.SetWindowsHookEx(
+            Win32.WH_MOUSE_LL, s_fileJumpAutoMouseThunk, Win32.GetModuleHandle(null), 0);
+        s_fileJumpAutoMouseHookForNext = _fileJumpAutoMouseHook;
+    }
+
+    private IntPtr FileJumpAutoMouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0
+            && _fileJumpAutoArmedRoot != IntPtr.Zero
+            && _appSettings != null
+            && _appSettings.FileJumpAutoOnFirstClick
+            && wParam.ToInt32() == Win32.WM_LBUTTONDOWN)
+        {
+            var info = Marshal.PtrToStructure<Win32.MSLLHOOKSTRUCT>(lParam);
+            var clickHwnd = Win32.WindowFromPoint(info.pt);
+            if (clickHwnd != IntPtr.Zero
+                && Win32.GetAncestor(clickHwnd, Win32.GA_ROOT) == _fileJumpAutoArmedRoot)
+            {
+                Dispatcher.BeginInvoke(new Action(TryFileJumpAutoNavigateAfterClick),
+                    System.Windows.Threading.DispatcherPriority.Normal);
+            }
+        }
+        return Win32.CallNextHookEx(_fileJumpAutoMouseHook, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// 对话框成为前台后由 <see cref="OnForegroundChanged"/> 调度；在满足条件时挂接低级鼠标钩，等待首次落在对话框内的左键。
+    /// 每个对话框顶层窗口在存活期内仅自动跳转成功一次（关闭后再开视为新窗口）。
+    /// </summary>
+    private void UpdateFileJumpClickToNavigateArm(IntPtr foregroundHwnd)
+    {
+        if (_appSettings == null || !_appSettings.FileJumpAutoOnFirstClick)
+        {
+            DisarmFileJumpClickToNavigate();
+            return;
+        }
+
+        if (_fileJumpAutoFirstJumpDoneRoot != IntPtr.Zero
+            && !Win32.IsWindow(_fileJumpAutoFirstJumpDoneRoot))
+            _fileJumpAutoFirstJumpDoneRoot = IntPtr.Zero;
+
+        if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress)
+        {
+            DisarmFileJumpClickToNavigate();
+            return;
+        }
+
+        if (foregroundHwnd == _hwnd)
+        {
+            DisarmFileJumpClickToNavigate();
+            return;
+        }
+
+        if (!FileDialogJumpHelper.IsLikelyFileDialog(foregroundHwnd))
+        {
+            if (_fileJumpAutoArmedRoot != IntPtr.Zero && Win32.IsWindow(foregroundHwnd))
+            {
+                var fgRoot = Win32.GetAncestor(foregroundHwnd, Win32.GA_ROOT);
+                if (fgRoot == _fileJumpAutoArmedRoot)
+                    return;
+            }
+            DisarmFileJumpClickToNavigate();
+            return;
+        }
+
+        var dialogHwnd = foregroundHwnd;
+        var dialogRoot = Win32.GetAncestor(dialogHwnd, Win32.GA_ROOT);
+        if (dialogRoot != IntPtr.Zero
+            && dialogRoot == _fileJumpAutoFirstJumpDoneRoot
+            && Win32.IsWindow(dialogRoot))
+        {
+            DisarmFileJumpClickToNavigate();
+            return;
+        }
+
+        if (_fileJumpAutoArmedDialog == dialogHwnd && _fileJumpAutoMouseHook != IntPtr.Zero)
+            return;
+
+        _fileJumpAutoArmedDialog = dialogHwnd;
+        _fileJumpAutoArmedRoot = dialogRoot;
+        InstallFileJumpAutoMouseHook();
+    }
+
+    private void TryFileJumpAutoNavigateAfterClick()
+    {
+        try
+        {
+            if (_appSettings == null) return;
+            var dlg = _fileJumpAutoArmedDialog;
+            if (dlg == IntPtr.Zero || !Win32.IsWindow(dlg)) return;
+            if (FileDialogJumpHelper.ClassifyFileDialog(dlg) == FileDialogKind.None) return;
+
+            var fg = Win32.GetForegroundWindow();
+            if (fg != IntPtr.Zero && Win32.GetAncestor(fg, Win32.GA_ROOT) != _fileJumpAutoArmedRoot)
+                return;
+
+            var mem = _appSettings.LastFileDialogFolder?.Trim();
+            var candidates = FileManagerPathCollector.CollectCandidates(dlg, mem);
+            if (candidates.Count == 0) return;
+
+            var doneRoot = Win32.GetAncestor(dlg, Win32.GA_ROOT);
+            DisarmFileJumpClickToNavigate();
+            if (FileDialogJumpHelper.TryNavigateToFolder(dlg, candidates[0].Path, _appSettings.EnableShellNavigateInject)
+                && doneRoot != IntPtr.Zero)
+                _fileJumpAutoFirstJumpDoneRoot = doneRoot;
+        }
+        catch (Exception ex)
+        {
+            ShellNavigateLog.Write("filejump", "TryFileJumpAutoNavigateAfterClick: " + ex);
+            DisarmFileJumpClickToNavigate();
+        }
     }
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -1445,6 +1637,9 @@ public partial class PopupWindow : Window
         {
             var idx = _allItems.IndexOf(item);
             if (idx > 0) { _allItems.RemoveAt(idx); _allItems.Insert(0, item); }
+            item.TouchCopiedTime();
+            if (item.PersistedId is long pid)
+                _historyStore.TryUpdateCopiedAt(pid, item.CopiedAt);
         }
 
         _isSettingClipboard = true;
@@ -1500,6 +1695,9 @@ public partial class PopupWindow : Window
         {
             var idx = _allItems.IndexOf(item);
             if (idx > 0) { _allItems.RemoveAt(idx); _allItems.Insert(0, item); }
+            item.TouchCopiedTime();
+            if (item.PersistedId is long pid)
+                _historyStore.TryUpdateCopiedAt(pid, item.CopiedAt);
         }
 
         var dir = Path.Combine(Path.GetTempPath(), "ClipboardX");
@@ -1645,6 +1843,8 @@ public partial class PopupWindow : Window
             ClearPendingDelete();
         if (entry.IsQuickPaste)
             _quickPastes.RemoveAll(q => q.Content == entry.TextContent);
+        else
+            _historyStore.TryDelete(entry.PersistedId);
         var removedListIndex = _displayItems.IndexOf(entry);
         _allItems.Remove(entry);
         RefreshFilter(removedListIndex >= 0 ? removedListIndex : null);
