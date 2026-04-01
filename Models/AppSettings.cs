@@ -21,6 +21,12 @@ public class AppSettings
 
     /// <summary>多候选时跳转列表弹出前的延时（毫秒）；0 表示立即弹出。</summary>
     public int FileJumpPickerShowDelayMs { get; set; } = 500;
+
+    /// <summary>
+    /// 系统公共文件对话框内跳转时，是否尝试将 Shell 导航 DLL 注入宿主进程（IShellBrowser::BrowseObject）。
+    /// 关闭后仅走地址栏/键入模拟，兼容部分杀软或宿主拦截注入的环境；WPS 等自定义对话框始终不注入。
+    /// </summary>
+    public bool EnableShellNavigateInject { get; set; } = true;
     public string Theme { get; set; } = "System";
     public string PopupPosition { get; set; } = "Caret";
     public double PopupOpacity { get; set; } = 0.95;
@@ -87,6 +93,8 @@ public class AppSettings
                     // 旧版 settings.json 无此字段时 Json 反序列化为 false，产品默认应为开启
                     if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
                         settings.RunAtStartup = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(EnableShellNavigateInject), out _))
+                        settings.EnableShellNavigateInject = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     return settings;
@@ -101,6 +109,8 @@ public class AppSettings
                     var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new();
                     if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
                         settings.RunAtStartup = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(EnableShellNavigateInject), out _))
+                        settings.EnableShellNavigateInject = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.Save();
@@ -131,6 +141,7 @@ public class AppSettings
         FileJumpHotkeyModifiers = FileJumpHotkeyModifiers,
         FileJumpHotkeyKey = FileJumpHotkeyKey,
         FileJumpPickerShowDelayMs = FileJumpPickerShowDelayMs,
+        EnableShellNavigateInject = EnableShellNavigateInject,
         Theme = Theme,
         PopupPosition = PopupPosition,
         PopupOpacity = PopupOpacity,

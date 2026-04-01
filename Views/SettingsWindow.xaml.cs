@@ -19,6 +19,7 @@ public partial class SettingsWindow : Window
     private double _pendingOpacity;
     private bool _pendingHideOnClick;
     private bool _pendingRunAtStartup;
+    private bool _pendingEnableShellNavigateInject;
     private string _pendingModifierKey;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
@@ -57,6 +58,9 @@ public partial class SettingsWindow : Window
 
         _pendingRunAtStartup = settings.RunAtStartup;
         StartupText.Text = _pendingRunAtStartup ? "开启" : "关闭";
+
+        _pendingEnableShellNavigateInject = settings.EnableShellNavigateInject;
+        ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
 
         PreviewLinesBox.Text = settings.PreviewMaxLines.ToString();
 
@@ -199,6 +203,12 @@ public partial class SettingsWindow : Window
         StartupText.Text = _pendingRunAtStartup ? "开启" : "关闭";
     }
 
+    private void ShellInjectCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingEnableShellNavigateInject = !_pendingEnableShellNavigateInject;
+        ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
+    }
+
     private static string ModifierDisplayName(string m) => m switch
     {
         "Alt" => "Alt",
@@ -271,6 +281,7 @@ public partial class SettingsWindow : Window
         _settings.PopupOpacity = _pendingOpacity;
         _settings.HideOnSameAppClick = _pendingHideOnClick;
         _settings.RunAtStartup = _pendingRunAtStartup;
+        _settings.EnableShellNavigateInject = _pendingEnableShellNavigateInject;
         _settings.PreviewMaxLines = previewLines;
         _settings.PanelModifierKey = _pendingModifierKey;
 

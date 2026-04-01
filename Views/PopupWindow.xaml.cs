@@ -31,9 +31,23 @@ public partial class PopupWindow : Window
     private IntPtr _keyboardHook;
     private IntPtr _mouseHook;
     private IntPtr _winEventHook;
-    private Win32.LowLevelKeyboardProc? _hookProc;
-    private Win32.LowLevelMouseProc? _mouseHookProc;
-    private Win32.WinEventDelegate? _winEventProc;
+
+    /// <summary>
+    /// WH_KEYBOARD_LL / WH_MOUSE_LL 回调由 user32 保存函数指针；Unhook 后仍可能再触发一两次。
+    /// 若此时实例字段上的委托已被置 null，CLR 可能已回收闭环委托，导致「callback on garbage collected delegate」崩溃。
+    /// 使用进程内长期存活的静态委托 + 当前拥有者指针，避免 lpfn 被回收。
+    /// </summary>
+    private static readonly Win32.LowLevelKeyboardProc s_popupKeyboardHookThunk = StaticKeyboardHookProc;
+    private static readonly Win32.LowLevelMouseProc s_popupMouseHookThunk = StaticMouseHookProc;
+    private static IntPtr s_popupKeyboardHookForNext;
+    private static PopupWindow? s_popupKeyboardHookOwner;
+    private static IntPtr s_popupMouseHookForNext;
+    private static PopupWindow? s_popupMouseHookOwner;
+
+    /// <summary>SetWinEventHook 同样会把托管委托交给系统；须用静态委托避免 Unhook 后晚到回调撞上已回收的实例委托。</summary>
+    private static readonly Win32.WinEventDelegate s_popupWinEventThunk = StaticWinEventProc;
+    private static PopupWindow? s_popupWinEventOwner;
+
     private bool _isSettingClipboard;
     private bool _isPopupVisible;
     private string _searchText = "";
@@ -806,12 +820,31 @@ public partial class PopupWindow : Window
 
     #region Keyboard Hook
 
+    private static IntPtr StaticKeyboardHookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        var owner = s_popupKeyboardHookOwner;
+        var hhk = s_popupKeyboardHookForNext;
+        if (owner != null && hhk != IntPtr.Zero)
+            return owner.KeyboardHookCallback(nCode, wParam, lParam);
+        return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
+    }
+
+    private static IntPtr StaticMouseHookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        var owner = s_popupMouseHookOwner;
+        var hhk = s_popupMouseHookForNext;
+        if (owner != null && hhk != IntPtr.Zero)
+            return owner.MouseHookCallback(nCode, wParam, lParam);
+        return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
+    }
+
     private void InstallKeyboardHook()
     {
         if (_keyboardHook != IntPtr.Zero) return;
-        _hookProc = KeyboardHookCallback;
+        s_popupKeyboardHookOwner = this;
         _keyboardHook = Win32.SetWindowsHookEx(
-            Win32.WH_KEYBOARD_LL, _hookProc, Win32.GetModuleHandle(null), 0);
+            Win32.WH_KEYBOARD_LL, s_popupKeyboardHookThunk, Win32.GetModuleHandle(null), 0);
+        s_popupKeyboardHookForNext = _keyboardHook;
     }
 
     private void UninstallKeyboardHook()
@@ -821,15 +854,20 @@ public partial class PopupWindow : Window
             Win32.UnhookWindowsHookEx(_keyboardHook);
             _keyboardHook = IntPtr.Zero;
         }
-        _hookProc = null;
+        if (s_popupKeyboardHookOwner == this)
+        {
+            s_popupKeyboardHookOwner = null;
+            s_popupKeyboardHookForNext = IntPtr.Zero;
+        }
     }
 
     private void InstallMouseHook()
     {
         if (_mouseHook != IntPtr.Zero) return;
-        _mouseHookProc = MouseHookCallback;
+        s_popupMouseHookOwner = this;
         _mouseHook = Win32.SetWindowsHookEx(
-            Win32.WH_MOUSE_LL, _mouseHookProc, Win32.GetModuleHandle(null), 0);
+            Win32.WH_MOUSE_LL, s_popupMouseHookThunk, Win32.GetModuleHandle(null), 0);
+        s_popupMouseHookForNext = _mouseHook;
     }
 
     private void UninstallMouseHook()
@@ -839,7 +877,11 @@ public partial class PopupWindow : Window
             Win32.UnhookWindowsHookEx(_mouseHook);
             _mouseHook = IntPtr.Zero;
         }
-        _mouseHookProc = null;
+        if (s_popupMouseHookOwner == this)
+        {
+            s_popupMouseHookOwner = null;
+            s_popupMouseHookForNext = IntPtr.Zero;
+        }
     }
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -874,13 +916,22 @@ public partial class PopupWindow : Window
         return Win32.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
     }
 
+    private static void StaticWinEventProc(
+        IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
+        int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
+    {
+        var owner = s_popupWinEventOwner;
+        if (owner != null)
+            owner.OnForegroundChanged(hWinEventHook, eventType, hwnd, idObject, idChild, dwEventThread, dwmsEventTime);
+    }
+
     private void InstallForegroundWatcher()
     {
         if (_winEventHook != IntPtr.Zero) return;
-        _winEventProc = OnForegroundChanged;
+        s_popupWinEventOwner = this;
         _winEventHook = Win32.SetWinEventHook(
             Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
-            IntPtr.Zero, _winEventProc, 0, 0,
+            IntPtr.Zero, s_popupWinEventThunk, 0, 0,
             Win32.WINEVENT_OUTOFCONTEXT | Win32.WINEVENT_SKIPOWNPROCESS);
     }
 
@@ -891,7 +942,8 @@ public partial class PopupWindow : Window
             Win32.UnhookWinEvent(_winEventHook);
             _winEventHook = IntPtr.Zero;
         }
-        _winEventProc = null;
+        if (s_popupWinEventOwner == this)
+            s_popupWinEventOwner = null;
     }
 
     private void OnForegroundChanged(
@@ -983,6 +1035,7 @@ public partial class PopupWindow : Window
             return;
 
         var mem = _appSettings.LastFileDialogFolder?.Trim();
+        var allowShellInject = _appSettings.EnableShellNavigateInject;
         var candidates = FileManagerPathCollector.CollectCandidates(dialogHwnd, mem);
         if (candidates.Count == 0)
         {
@@ -993,7 +1046,7 @@ public partial class PopupWindow : Window
         if (candidates.Count == 1)
         {
             ClearFileJumpDoubleTapState();
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[0].Path);
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[0].Path, allowShellInject);
             return;
         }
 
@@ -1003,7 +1056,7 @@ public partial class PopupWindow : Window
         {
             _fileJumpPickerSession++;
             ClearFileJumpDoubleTapState();
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path);
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path, allowShellInject);
             Dispatcher.BeginInvoke(() => _activeFileJumpPicker?.Close(),
                 System.Windows.Threading.DispatcherPriority.Normal);
             return;
@@ -1020,7 +1073,7 @@ public partial class PopupWindow : Window
             _fileJumpPickerSession++;
             ClearFileJumpDoubleTapState();
             var path = candidates[prefer].Path;
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, path);
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, path, allowShellInject);
             Dispatcher.BeginInvoke(() => _activeFileJumpPicker?.Close(),
                 System.Windows.Threading.DispatcherPriority.Normal);
             return;
@@ -1063,7 +1116,7 @@ public partial class PopupWindow : Window
                         ClearFileJumpDoubleTapState();
                     };
                     if (picker.ShowDialog() == true && !string.IsNullOrEmpty(picker.SelectedPath))
-                        FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath);
+                        FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath, allowShellInject);
                 }
                 finally
                 {

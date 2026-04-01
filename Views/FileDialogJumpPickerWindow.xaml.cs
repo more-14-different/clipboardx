@@ -18,6 +18,16 @@ public partial class FileDialogJumpPickerWindow : Window
 {
     private const int PageSize = 8;
 
+    /// <summary>低级钩子回调须用静态委托持有，避免 Unhook 后晚到回调撞上已被回收的实例委托（见 <see cref="PopupWindow"/> 说明）。</summary>
+    private static readonly Win32.LowLevelKeyboardProc s_jumpPickerKbThunk = StaticJumpPickerKeyboardHook;
+    private static readonly Win32.LowLevelMouseProc s_jumpPickerMouseThunk = StaticJumpPickerMouseHook;
+    private static readonly Win32.WinEventDelegate s_jumpPickerWinEventThunk = StaticJumpPickerWinEventProc;
+    private static IntPtr s_jumpPickerKbHookForNext;
+    private static FileDialogJumpPickerWindow? s_jumpPickerKbOwner;
+    private static IntPtr s_jumpPickerMouseHookForNext;
+    private static FileDialogJumpPickerWindow? s_jumpPickerMouseOwner;
+    private static FileDialogJumpPickerWindow? s_jumpPickerWinEventOwner;
+
     private readonly IntPtr _fileDialogOwnerHwnd;
     private readonly int _mouseScreenX;
     private readonly int _mouseScreenY;
@@ -25,7 +35,6 @@ public partial class FileDialogJumpPickerWindow : Window
     private readonly List<FileJumpCandidate> _collectorSnapshot;
 
     private IntPtr _jumpKeyboardHook;
-    private Win32.LowLevelKeyboardProc? _jumpHookProc;
     private bool _suppressJumpHook;
 
     private IntPtr _hwnd;
@@ -35,12 +44,10 @@ public partial class FileDialogJumpPickerWindow : Window
 
     /// <summary>对齐剪切板弹窗：<see cref="AppSettings.HideOnSameAppClick"/> 时点击跳转窗外关闭。</summary>
     private IntPtr _jumpPickerMouseHook;
-    private Win32.LowLevelMouseProc? _jumpPickerMouseHookProc;
     private bool _clickReceivedByJumpPicker;
     private bool _suppressDismissForSubDialog;
 
     private IntPtr _jumpPickerWinEventHook;
-    private Win32.WinEventDelegate? _jumpPickerWinEventProc;
 
     private int _pendingPhysX;
     private int _pendingPhysY;
@@ -151,16 +158,17 @@ public partial class FileDialogJumpPickerWindow : Window
     private void InstallJumpPickerOutsideHooks()
     {
         if (_jumpPickerMouseHook != IntPtr.Zero) return;
-        _jumpPickerMouseHookProc = JumpPickerMouseHookProc;
+        s_jumpPickerMouseOwner = this;
         _jumpPickerMouseHook = Win32.SetWindowsHookEx(
-            Win32.WH_MOUSE_LL, _jumpPickerMouseHookProc, Win32.GetModuleHandle(null), 0);
+            Win32.WH_MOUSE_LL, s_jumpPickerMouseThunk, Win32.GetModuleHandle(null), 0);
+        s_jumpPickerMouseHookForNext = _jumpPickerMouseHook;
 
         if (_jumpPickerWinEventHook == IntPtr.Zero)
         {
-            _jumpPickerWinEventProc = JumpPickerForegroundCallback;
+            s_jumpPickerWinEventOwner = this;
             _jumpPickerWinEventHook = Win32.SetWinEventHook(
                 Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
-                IntPtr.Zero, _jumpPickerWinEventProc, 0, 0,
+                IntPtr.Zero, s_jumpPickerWinEventThunk, 0, 0,
                 Win32.WINEVENT_OUTOFCONTEXT | Win32.WINEVENT_SKIPOWNPROCESS);
         }
     }
@@ -172,14 +180,46 @@ public partial class FileDialogJumpPickerWindow : Window
             Win32.UnhookWindowsHookEx(_jumpPickerMouseHook);
             _jumpPickerMouseHook = IntPtr.Zero;
         }
-        _jumpPickerMouseHookProc = null;
+        if (s_jumpPickerMouseOwner == this)
+        {
+            s_jumpPickerMouseOwner = null;
+            s_jumpPickerMouseHookForNext = IntPtr.Zero;
+        }
 
         if (_jumpPickerWinEventHook != IntPtr.Zero)
         {
             Win32.UnhookWinEvent(_jumpPickerWinEventHook);
             _jumpPickerWinEventHook = IntPtr.Zero;
         }
-        _jumpPickerWinEventProc = null;
+        if (s_jumpPickerWinEventOwner == this)
+            s_jumpPickerWinEventOwner = null;
+    }
+
+    private static IntPtr StaticJumpPickerKeyboardHook(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        var owner = s_jumpPickerKbOwner;
+        var hhk = s_jumpPickerKbHookForNext;
+        if (owner != null && hhk != IntPtr.Zero)
+            return owner.JumpKeyboardHookProc(nCode, wParam, lParam);
+        return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
+    }
+
+    private static IntPtr StaticJumpPickerMouseHook(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        var owner = s_jumpPickerMouseOwner;
+        var hhk = s_jumpPickerMouseHookForNext;
+        if (owner != null && hhk != IntPtr.Zero)
+            return owner.JumpPickerMouseHookProc(nCode, wParam, lParam);
+        return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
+    }
+
+    private static void StaticJumpPickerWinEventProc(
+        IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
+        int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
+    {
+        var owner = s_jumpPickerWinEventOwner;
+        if (owner != null)
+            owner.JumpPickerForegroundCallback(hWinEventHook, eventType, hwnd, idObject, idChild, dwEventThread, dwmsEventTime);
     }
 
     private IntPtr JumpPickerMouseHookProc(int nCode, IntPtr wParam, IntPtr lParam)
@@ -232,9 +272,10 @@ public partial class FileDialogJumpPickerWindow : Window
     private void InstallKeyboardHook()
     {
         if (_jumpKeyboardHook != IntPtr.Zero) return;
-        _jumpHookProc = JumpKeyboardHookProc;
+        s_jumpPickerKbOwner = this;
         _jumpKeyboardHook = Win32.SetWindowsHookEx(
-            Win32.WH_KEYBOARD_LL, _jumpHookProc, Win32.GetModuleHandle(null), 0);
+            Win32.WH_KEYBOARD_LL, s_jumpPickerKbThunk, Win32.GetModuleHandle(null), 0);
+        s_jumpPickerKbHookForNext = _jumpKeyboardHook;
     }
 
     private void UninstallKeyboardHook()
@@ -242,7 +283,11 @@ public partial class FileDialogJumpPickerWindow : Window
         if (_jumpKeyboardHook == IntPtr.Zero) return;
         Win32.UnhookWindowsHookEx(_jumpKeyboardHook);
         _jumpKeyboardHook = IntPtr.Zero;
-        _jumpHookProc = null;
+        if (s_jumpPickerKbOwner == this)
+        {
+            s_jumpPickerKbOwner = null;
+            s_jumpPickerKbHookForNext = IntPtr.Zero;
+        }
     }
 
     private IntPtr JumpKeyboardHookProc(int nCode, IntPtr wParam, IntPtr lParam)
@@ -461,7 +506,7 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         var m = PanelModifierDisplayName(_settings.PanelModifierKey);
         FooterHintsText.Text =
-            $"{m}+1~9 跳转 · ↑↓ 选择 · ←→ 翻页 · Enter 确认 · Tab · 字母搜索 · 右键收藏 · Esc 取消/清搜索";
+            $"{m}+1~9 跳转 · ↑↓ 选择 · ←→ 翻页 · 单击或 Enter 确认 · Tab · 字母搜索 · 右键收藏 · Esc 取消/清搜索";
     }
 
     private static string PanelModifierDisplayName(string key) => key switch
@@ -639,10 +684,17 @@ public partial class FileDialogJumpPickerWindow : Window
         catch { /* ignore */ }
     }
 
-    private void ItemsList_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    private void ItemsList_OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (ItemsList.SelectedItem is FileJumpPickerRow row)
+        if (e.ChangedButton != MouseButton.Left) return;
+        var el = e.OriginalSource as DependencyObject;
+        while (el != null && el is not ListBoxItem)
+            el = VisualTreeHelper.GetParent(el);
+        if (el is ListBoxItem lbi && lbi.DataContext is FileJumpPickerRow row)
+        {
+            ItemsList.SelectedItem = row;
             CommitAndClose(row.Path);
+        }
     }
 
     private void ItemsList_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
@@ -777,23 +829,6 @@ public partial class FileDialogJumpPickerWindow : Window
             _suppressDismissForSubDialog = false;
             _suppressJumpHook = false;
         }
-    }
-
-    private void Ok_Click(object sender, MouseButtonEventArgs e)
-    {
-        e.Handled = true;
-        if (ItemsList.SelectedItem is FileJumpPickerRow row)
-            CommitAndClose(row.Path);
-        else
-            System.Windows.MessageBox.Show(this, "请选择一项路径。", Title,
-                MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private void Cancel_Click(object sender, MouseButtonEventArgs e)
-    {
-        e.Handled = true;
-        DialogResult = false;
-        Close();
     }
 
     private void JumpByQuickIndex(int index1To9)

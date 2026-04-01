@@ -80,22 +80,52 @@ internal static class FileDialogJumpHelper
     {
         if (string.IsNullOrEmpty(title)) return false;
         if (title.Contains("打开文件", StringComparison.Ordinal)) return true;
+        if (title.Contains("打开文档", StringComparison.Ordinal)) return true;
+        if (title.Contains("打开工作簿", StringComparison.Ordinal)) return true;
+        if (title.Contains("打开演示", StringComparison.Ordinal)) return true;
         if (title.Contains("另存文件", StringComparison.Ordinal)) return true;
         if (title.Contains("保存文件", StringComparison.Ordinal)) return true;
-        // 简短标题（部分语言包）
+        if (title.Contains("选择文件", StringComparison.Ordinal)) return true;
+        if (title.Contains("选取文件", StringComparison.Ordinal)) return true;
+        if (title.Contains("浏览文件夹", StringComparison.Ordinal)) return true;
+        // 简短标题（部分语言包 / 新版本）
         if (title.Equals("另存为", StringComparison.Ordinal)) return true;
         if (title.Equals("保存", StringComparison.Ordinal)) return true;
+        if (title.Equals("打开", StringComparison.Ordinal)) return true;
+        if (title.StartsWith("打开(", StringComparison.Ordinal)) return true;
+        if (title.StartsWith("另存为(", StringComparison.Ordinal)) return true;
         var t = title.ToLowerInvariant();
         if (t.Contains("save as")) return true;
         if (t.Contains("open file")) return true;
+        if (t.Contains("browse")) return true;
+        if (t.Contains("select file")) return true;
+        if (t is "open" or "save") return true;
         return false;
+    }
+
+    /// <summary>Qt 壳 + 极短本地化标题时补充匹配（仍要求 WPS 进程）。</summary>
+    private static bool IsWpsQtLikeWindowClass(string className)
+    {
+        if (string.IsNullOrEmpty(className)) return false;
+        return className.Contains("Qt", StringComparison.Ordinal)
+               || className.Contains("QWindow", StringComparison.Ordinal);
     }
 
     private static bool IsWpsSuiteFileDialog(IntPtr hwnd)
     {
         if (!TryGetExeBaseNameLower(hwnd, out var exe) || !IsWpsSuiteExe(exe))
             return false;
-        return IsWpsFileDialogTitle(Win32.GetWindowText(hwnd));
+        var title = Win32.GetWindowText(hwnd);
+        if (IsWpsFileDialogTitle(title))
+            return true;
+        // 新版常见 Qt 顶层窗：标题仅有「打开/另存/保存」等简短词时，上文完整短语未命中
+        if (IsWpsQtLikeWindowClass(Win32.GetWindowClassName(hwnd))
+            && !string.IsNullOrEmpty(title)
+            && (title.Contains("打开", StringComparison.Ordinal)
+                || title.Contains("另存", StringComparison.Ordinal)
+                || title.Contains("保存", StringComparison.Ordinal)))
+            return true;
+        return false;
     }
 
     private static HashSet<string> CollectDescendantClassNames(IntPtr root)
@@ -482,7 +512,8 @@ internal static class FileDialogJumpHelper
         }
     }
 
-    public static bool TryNavigateToFolder(IntPtr dialogHwnd, string folderPath)
+    /// <param name="allowShellInject">为 false 时不注入宿主进程，仅走 UIA/地址栏等模拟（兼容拦截注入的环境）。</param>
+    public static bool TryNavigateToFolder(IntPtr dialogHwnd, string folderPath, bool allowShellInject = true)
     {
         var kind = ClassifyFileDialog(dialogHwnd);
         if (kind == FileDialogKind.None) return false;
@@ -490,7 +521,8 @@ internal static class FileDialogJumpHelper
         var path = NormalizeFolderPathForNavigation(folderPath);
         if (!Directory.Exists(path)) return false;
 
-        if (kind != FileDialogKind.WpsCustom
+        if (allowShellInject
+            && kind != FileDialogKind.WpsCustom
             && ShellDialogDeepNavigate.TryBrowseObjectInject(dialogHwnd, path))
             return true;
 
@@ -501,7 +533,7 @@ internal static class FileDialogJumpHelper
         return TryNavigateAddressBarStyle(dialogHwnd, path);
     }
 
-    /// <summary>WPS：无 IShellBrowser，优先 UIA 可写路径；否则用底部「文件名」Edit 填目录+回车（常见与系统对话框类似）。</summary>
+    /// <summary>WPS：无 IShellBrowser，优先 UIA ValuePattern；否则 ComboBoxEx 内嵌 Edit、底部 Edit/RichEdit、Alt+D 地址栏、Ctrl+L。</summary>
     private static bool TryNavigateWpsCustom(IntPtr dialogHwnd, string folderPath)
     {
         if (!Directory.Exists(folderPath)) return false;
@@ -525,32 +557,89 @@ internal static class FileDialogJumpHelper
             return true;
         }
 
-        var bottomEdit = FindBottomMostEditHwnd(dialogHwnd);
-        if (bottomEdit != IntPtr.Zero)
-        {
-            var cap = (int)(long)Win32.SendMessage(bottomEdit, Win32.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero);
-            if (cap < 0) cap = 0;
-            cap = Math.Min(cap + 64, 32767);
-            var oldSb = new StringBuilder(Math.Max(cap, 256));
-            Win32.SendMessage(bottomEdit, Win32.WM_GETTEXT, (IntPtr)oldSb.Capacity, oldSb);
-            var oldText = oldSb.ToString();
-
-            Win32.SendMessage(bottomEdit, Win32.WM_SETTEXT, IntPtr.Zero, folderWithSlash);
-            Win32.SetFocus(bottomEdit);
-            Thread.Sleep(40);
-            SendEnter();
-            Thread.Sleep(120);
-
-            Win32.SendMessage(bottomEdit, Win32.WM_SETTEXT, IntPtr.Zero, oldText);
+        var comboEdit = FindComboBoxExEmbeddedEdit(dialogHwnd);
+        if (comboEdit != IntPtr.Zero && TryWpsFillEditWithFolderAndEnter(comboEdit, folderWithSlash))
             return true;
-        }
 
+        var bottomInput = FindBottomMostPathInputHwnd(dialogHwnd);
+        if (bottomInput != IntPtr.Zero && TryWpsFillEditWithFolderAndEnter(bottomInput, folderWithSlash))
+            return true;
+
+        SendAltD();
+        Thread.Sleep(160);
+        try
+        {
+            if (TrySetFocusedAddressValue(norm))
+            {
+                Thread.Sleep(50);
+                SendEnter();
+                Thread.Sleep(120);
+                return true;
+            }
+        }
+        catch { /* ignore */ }
+
+        ShellNavigateLog.Write("wps",
+            $"TryNavigateWpsCustom 回退 Ctrl+L；class={Win32.GetWindowClassName(dialogHwnd)} title={Win32.GetWindowText(dialogHwnd)}");
         SendCtrlL();
         Thread.Sleep(120);
         SendUnicodeString(norm);
         Thread.Sleep(50);
         SendEnter();
+        Thread.Sleep(120);
         return true;
+    }
+
+    /// <summary>commctrl ComboBoxEx32 内嵌编辑框，常见于地址栏。</summary>
+    private static IntPtr FindComboBoxExEmbeddedEdit(IntPtr root)
+    {
+        IntPtr found = IntPtr.Zero;
+        const uint cbemGetEditControl = 0x0400 + 102;
+        void Walk(IntPtr h)
+        {
+            if (found != IntPtr.Zero) return;
+            if (string.Equals(Win32.GetWindowClassName(h), "ComboBoxEx32", StringComparison.OrdinalIgnoreCase))
+            {
+                var edit = Win32.SendMessage(h, cbemGetEditControl, IntPtr.Zero, IntPtr.Zero);
+                if (edit != IntPtr.Zero)
+                    found = edit;
+                return;
+            }
+            Win32.EnumChildWindows(h, (c, _) =>
+            {
+                Walk(c);
+                return true;
+            }, IntPtr.Zero);
+        }
+        Walk(root);
+        return found;
+    }
+
+    private static bool TryWpsFillEditWithFolderAndEnter(IntPtr hwnd, string folderWithSlash)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        try
+        {
+            var cap = (int)(long)Win32.SendMessage(hwnd, Win32.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero);
+            if (cap < 0) cap = 0;
+            cap = Math.Min(cap + 64, 32767);
+            var oldSb = new StringBuilder(Math.Max(cap, 256));
+            Win32.SendMessage(hwnd, Win32.WM_GETTEXT, (IntPtr)oldSb.Capacity, oldSb);
+            var oldText = oldSb.ToString();
+
+            Win32.SendMessage(hwnd, Win32.WM_SETTEXT, IntPtr.Zero, folderWithSlash);
+            Win32.SetFocus(hwnd);
+            Thread.Sleep(40);
+            SendEnter();
+            Thread.Sleep(120);
+
+            Win32.SendMessage(hwnd, Win32.WM_SETTEXT, IntPtr.Zero, oldText);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryWpsSetPathViaValuePattern(IntPtr dialogHwnd, string fullPath)
@@ -559,11 +648,10 @@ internal static class FileDialogJumpHelper
         {
             var root = AutomationElement.FromHandle(dialogHwnd);
             if (root == null) return false;
-            AutomationElement? bestEl = null;
-            var bestScore = -1;
+            var candidates = new List<(int score, AutomationElement el)>();
             var q = new Queue<AutomationElement>();
             q.Enqueue(root);
-            for (var seen = 0; q.Count > 0 && seen < 400; seen++)
+            for (var seen = 0; q.Count > 0 && seen < 450; seen++)
             {
                 var el = q.Dequeue();
                 try
@@ -577,50 +665,88 @@ internal static class FileDialogJumpHelper
                 {
                     if (!el.TryGetCurrentPattern(ValuePattern.Pattern, out var vpObj))
                         continue;
-                    if (!((ValuePattern)vpObj).Current.IsReadOnly)
-                    {
-                        var score = 1;
-                        try
-                        {
-                            var n = el.Current.Name ?? "";
-                            if (n.Contains("地址", StringComparison.Ordinal)
-                                || n.Contains("路径", StringComparison.Ordinal)
-                                || n.Contains("位置", StringComparison.Ordinal))
-                                score += 4;
-                            if (n.Contains("文件", StringComparison.Ordinal) && n.Contains("名", StringComparison.Ordinal))
-                                score += 2;
-                        }
-                        catch { /* ignore */ }
-
-                        if (score > bestScore)
-                        {
-                            bestScore = score;
-                            bestEl = el;
-                        }
-                    }
+                    var vp = (ValuePattern)vpObj;
+                    var score = WpsValuePatternCandidateScore(el, vp);
+                    if (score < 0)
+                        continue;
+                    candidates.Add((score, el));
                 }
                 catch { /* ignore */ }
             }
 
-            if (bestEl == null) return false;
-            if (!bestEl.TryGetCurrentPattern(ValuePattern.Pattern, out var useVp)) return false;
-            ((ValuePattern)useVp).SetValue(fullPath);
-            return true;
+            foreach (var (_, el) in candidates.OrderByDescending(t => t.score))
+            {
+                try
+                {
+                    if (!el.TryGetCurrentPattern(ValuePattern.Pattern, out var useVp))
+                        continue;
+                    var v = (ValuePattern)useVp;
+                    if (v.Current.IsReadOnly)
+                        continue;
+                    v.SetValue(fullPath);
+                    return true;
+                }
+                catch { /* ignore */ }
+            }
+
+            // 部分 Qt/自定义提供程序误报 IsReadOnly，第二轮不区分只读位一律尝试
+            foreach (var (_, el) in candidates.OrderByDescending(t => t.score))
+            {
+                try
+                {
+                    if (!el.TryGetCurrentPattern(ValuePattern.Pattern, out var useVp))
+                        continue;
+                    ((ValuePattern)useVp).SetValue(fullPath);
+                    return true;
+                }
+                catch { /* ignore */ }
+            }
         }
-        catch
-        {
-            return false;
-        }
+        catch { /* ignore */ }
+
+        return false;
     }
 
-    /// <summary>取屏幕上最靠下的 Win32 Edit，通常为「文件名(N)」编辑框，可用于路径跳转。</summary>
-    private static IntPtr FindBottomMostEditHwnd(IntPtr root)
+    /// <summary>分数越高越可能是地址/路径框；返回 -1 表示不参与。</summary>
+    private static int WpsValuePatternCandidateScore(AutomationElement el, ValuePattern vp)
+    {
+        var score = 0;
+        try
+        {
+            if (!vp.Current.IsReadOnly)
+                score += 2;
+            var curVal = vp.Current.Value ?? "";
+            if (curVal.Contains(':', StringComparison.Ordinal) && (curVal.Contains('\\') || curVal.Contains('/')))
+                score += 3;
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            var n = el.Current.Name ?? "";
+            if (n.Contains("地址", StringComparison.Ordinal)
+                || n.Contains("路径", StringComparison.Ordinal)
+                || n.Contains("位置", StringComparison.Ordinal))
+                score += 6;
+            if (n.Contains("文件夹", StringComparison.Ordinal))
+                score += 4;
+            if (n.Contains("文件", StringComparison.Ordinal) && n.Contains("名", StringComparison.Ordinal))
+                score += 1;
+        }
+        catch { /* ignore */ }
+
+        return score > 0 ? score : -1;
+    }
+
+    /// <summary>取屏幕上最靠下的路径类输入控件（Edit / RichEdit），通常为「文件名」或底部路径框。</summary>
+    private static IntPtr FindBottomMostPathInputHwnd(IntPtr root)
     {
         IntPtr best = IntPtr.Zero;
         var bestBottom = int.MinValue;
         void Walk(IntPtr h)
         {
-            if (string.Equals(Win32.GetWindowClassName(h), "Edit", StringComparison.Ordinal))
+            var cls = Win32.GetWindowClassName(h);
+            if (IsWin32PathInputClass(cls))
             {
                 if (Win32.GetWindowRect(h, out var r) && r.Bottom >= bestBottom)
                 {
@@ -636,6 +762,13 @@ internal static class FileDialogJumpHelper
         }
         Walk(root);
         return best;
+    }
+
+    private static bool IsWin32PathInputClass(string cls)
+    {
+        if (string.Equals(cls, "Edit", StringComparison.OrdinalIgnoreCase)) return true;
+        if (cls.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase)) return true;
+        return string.Equals(cls, "RICHEDIT50W", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>QuickSwitch FeedDialogSYSLISTVIEW：改 Edit1 为文件夹路径并回车，再恢复原文件名。</summary>
@@ -741,6 +874,17 @@ internal static class FileDialogJumpHelper
         }
         catch { }
         return false;
+    }
+
+    /// <summary>与资源管理器一致：Alt+D 聚焦地址栏（部分宿主自带的打开对话框也支持）。</summary>
+    private static void SendAltD()
+    {
+        var inputs = new Win32.INPUT[4];
+        inputs[0].type = Win32.INPUT_KEYBOARD; inputs[0].u.ki.wVk = 0x12; // VK_MENU
+        inputs[1].type = Win32.INPUT_KEYBOARD; inputs[1].u.ki.wVk = 0x44; // VK_D
+        inputs[2].type = Win32.INPUT_KEYBOARD; inputs[2].u.ki.wVk = 0x44; inputs[2].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+        inputs[3].type = Win32.INPUT_KEYBOARD; inputs[3].u.ki.wVk = 0x12; inputs[3].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+        Win32.SendInput(4, inputs, Marshal.SizeOf<Win32.INPUT>());
     }
 
     private static void SendCtrlL()

@@ -308,6 +308,7 @@ public partial class App : Application
             _settings.PopupOpacity = copy.PopupOpacity;
             _settings.HideOnSameAppClick = copy.HideOnSameAppClick;
             _settings.RunAtStartup = copy.RunAtStartup;
+            _settings.EnableShellNavigateInject = copy.EnableShellNavigateInject;
             _settings.PreviewMaxLines = copy.PreviewMaxLines;
             _settings.PanelModifierKey = copy.PanelModifierKey;
             StartupRegistration.Apply(_settings.RunAtStartup);
