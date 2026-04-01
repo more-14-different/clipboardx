@@ -20,6 +20,17 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # 编出 ShellNavigate DLL；publish 时 IncludeAllContentForSelfExtract 将其打入单文件 exe，运行时解压到 BaseDirectory
+      - name: Build ShellNavigate native DLLs
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          & "${{ github.workspace }}/native/ShellNavigate/build.ps1"
+          $d64 = "${{ github.workspace }}/native/ShellNavigate/bin/x64/Release/ClipboardXShellNavigate.dll"
+          $d32 = "${{ github.workspace }}/native/ShellNavigate/bin/Win32/Release/ClipboardXShellNavigate32.dll"
+          if (-not (Test-Path $d64)) { throw "Missing $d64" }
+          if (-not (Test-Path $d32)) { throw "Missing $d32" }
+
       - name: Version from tag
         id: ver
         shell: bash
@@ -33,6 +44,7 @@ jobs:
           -p:SelfContained=false
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:IncludeAllContentForSelfExtract=true
           -p:DebugType=None
           -p:Version=${{ steps.ver.outputs.version }}
           -o publish/fdd
@@ -43,10 +55,23 @@ jobs:
           -p:SelfContained=true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:IncludeAllContentForSelfExtract=true
           -p:EnableCompressionInSingleFile=true
           -p:DebugType=None
           -p:Version=${{ steps.ver.outputs.version }}
           -o publish/sc
+
+      - name: Verify publish output is single-file (no loose .dll)
+        shell: pwsh
+        run: |
+          foreach ($dir in @('publish/fdd', 'publish/sc')) {
+            $loose = Get-ChildItem -Path $dir -Filter '*.dll' -File -ErrorAction SilentlyContinue
+            if ($loose.Count -gt 0) {
+              throw "Expected all native payloads inside ClipboardX.exe; found in ${dir}: $($loose.Name -join ', ')"
+            }
+            $exe = Join-Path $dir 'ClipboardX.exe'
+            if (-not (Test-Path $exe)) { throw "Missing $exe" }
+          }
 
       - name: Check exe sizes (no-runtime 应远小于 self-contained)
         shell: pwsh

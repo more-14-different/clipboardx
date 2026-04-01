@@ -1,4 +1,6 @@
 using System.IO;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -15,9 +17,70 @@ public partial class App : Application
     private WinForms.NotifyIcon? _trayIcon;
     private PopupWindow? _popup;
     private AppSettings _settings = new();
+    private static bool _probingAssemblyResolveRegistered;
+
+    /// <summary>
+    /// 部分宿主下 <see cref="AppContext.BaseDirectory"/> 与主程序集所在目录不一致，会导致无法找到 NPinyin 等旁路 dll；
+    /// 从 <see cref="Assembly.Location"/> 目录补解析（单文件时 Location 为空，回退 BaseDirectory）。
+    /// </summary>
+    private static void RegisterProbingAssemblyResolve()
+    {
+        if (_probingAssemblyResolveRegistered) return;
+        _probingAssemblyResolveRegistered = true;
+
+        AppDomain.CurrentDomain.AssemblyResolve += (_, args) =>
+        {
+            try
+            {
+                var an = new AssemblyName(args.Name);
+                if (string.IsNullOrEmpty(an.Name)) return null;
+
+                var dir = GetDependencyProbeDirectory();
+                if (string.IsNullOrEmpty(dir)) return null;
+
+                var dll = Path.Combine(dir, an.Name + ".dll");
+                if (File.Exists(dll))
+                    return AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+
+                if (!string.IsNullOrEmpty(an.CultureName))
+                {
+                    var sat = Path.Combine(dir, an.CultureName, an.Name + ".dll");
+                    if (File.Exists(sat))
+                        return AssemblyLoadContext.Default.LoadFromAssemblyPath(sat);
+                }
+            }
+            catch
+            {
+                /* 由 CLR 继续尝试默认探测 */
+            }
+            return null;
+        };
+    }
+
+    private static string? GetDependencyProbeDirectory()
+    {
+        try
+        {
+            var loc = typeof(App).Assembly.Location;
+            if (!string.IsNullOrEmpty(loc))
+            {
+                var d = Path.GetDirectoryName(loc);
+                if (!string.IsNullOrEmpty(d)) return d;
+            }
+        }
+        catch
+        {
+            /* ignore */
+        }
+
+        var b = AppContext.BaseDirectory;
+        if (string.IsNullOrEmpty(b)) return null;
+        return b.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        RegisterProbingAssemblyResolve();
         base.OnStartup(e);
 
         // WinForms 托盘/上下文菜单在 WPF 宿主中更稳妥
