@@ -106,8 +106,13 @@ public partial class App : Application
 
     private static void ShowAboutDialog()
     {
+        var body =
+            $"版本：{AppInfo.DisplayVersion}\n" +
+            $"GitHub：{AppInfo.GitHubUrl}\n\n" +
+            "作者：mact\n" +
+            "邮箱：chaoji000010@163.com";
         System.Windows.MessageBox.Show(
-            "作者：mact\n邮箱：chaoji000010@163.com",
+            body,
             "关于剪切板管理器",
             MessageBoxButton.OK,
             MessageBoxImage.Information);

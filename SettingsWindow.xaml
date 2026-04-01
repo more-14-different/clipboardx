@@ -4,7 +4,8 @@
         Title="剪切板管理器 - 设置"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
-        Width="420" Height="698"
+        Width="420"
+        SizeToContent="Height"
         Background="{DynamicResource WindowBgBrush}">
 
     <Grid Margin="20,18,20,14">

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace ClipboardManager;
@@ -24,6 +26,13 @@ public static class PerUserInstall
         Path.Combine(InstallDirectory, "ClipboardManager.exe");
 
     public static string DisplayName => "剪切板管理器";
+
+    /// <summary>当前用户「开始」菜单程序文件夹中的快捷方式路径。</summary>
+    public static string StartMenuShortcutPath =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            @"Microsoft\Windows\Start Menu\Programs",
+            $"{DisplayName}.lnk");
 
     private static bool IsDevBypass =>
         string.Equals(Environment.GetEnvironmentVariable("CLIPBOARD_MANAGER_DEV"),
@@ -93,9 +102,10 @@ public static class PerUserInstall
     /// <returns>是否已执行卸载流程至结束（用户选「取消」时为 false）</returns>
     private static bool RunUninstallWizard(bool standaloneUninstallProcess)
     {
+        var ver = AppInfo.DisplayVersion;
         var verify = System.Windows.MessageBox.Show(
-            "将卸载剪切板管理器、移除开机启动与「应用和功能」条目，并删除安装目录中的程序文件。\n\n是否同时删除配置与历史记录？（%AppData%\\ClipboardManager）\n\n「是」删除程序与配置；「否」只删程序；「取消」中止。",
-            "卸载剪切板管理器",
+            $"将卸载剪切板管理器（版本 {ver}）、移除开始菜单快捷方式、开机启动与「应用和功能」条目，并删除安装目录中的程序文件。\n\n是否同时删除配置与历史记录？（%AppData%\\ClipboardManager）\n\n「是」删除程序与配置；「否」只删程序；「取消」中止。",
+            $"卸载剪切板管理器 — {ver}",
             System.Windows.MessageBoxButton.YesNoCancel,
             System.Windows.MessageBoxImage.Question);
 
@@ -136,6 +146,8 @@ public static class PerUserInstall
             catch { /* ignore */ }
         }
 
+        TryRemoveStartMenuShortcut();
+
         var dir = InstallDirectory;
         try
         {
@@ -174,11 +186,94 @@ public static class PerUserInstall
         {
             using var check = Registry.CurrentUser.OpenSubKey(
                 $@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{UninstallRegistryKeyName}");
-            if (check != null) return;
+            if (check == null)
+                WriteUninstallRegistry(InstalledExecutablePath);
+            else
+            {
+                try
+                {
+                    using var key = Registry.CurrentUser.OpenSubKey(
+                        $@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{UninstallRegistryKeyName}",
+                        writable: true);
+                    key?.SetValue("DisplayVersion", AppInfo.DisplayVersion);
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
         }
-        catch { return; }
+        catch
+        {
+            return;
+        }
 
-        WriteUninstallRegistry(InstalledExecutablePath);
+        EnsureStartMenuShortcut(InstalledExecutablePath);
+    }
+
+    /// <summary>
+    /// 更新或创建开始菜单中的「剪切板管理器」快捷方式（指向已安装的 exe）。
+    /// </summary>
+    public static void EnsureStartMenuShortcut(string targetExePath)
+    {
+        try
+        {
+            var folder = Path.GetDirectoryName(StartMenuShortcutPath);
+            if (!string.IsNullOrEmpty(folder))
+                Directory.CreateDirectory(folder);
+
+            WriteShellShortcut(
+                StartMenuShortcutPath,
+                targetExePath,
+                Path.GetDirectoryName(targetExePath) ?? InstallDirectory,
+                DisplayName,
+                $"{targetExePath},0");
+        }
+        catch
+        {
+            // 无权写开始菜单或 COM 异常时不阻止主流程
+        }
+    }
+
+    /// <summary>使用 <c>WScript.Shell</c> 写 .lnk，避免 SDK 项目无法引用 <c>IWshRuntimeLibrary</c>。</summary>
+    private static void WriteShellShortcut(string shortcutPath, string targetPath, string workingDirectory,
+        string description, string iconLocation)
+    {
+        var t = Type.GetTypeFromProgID("WScript.Shell");
+        if (t == null) return;
+        object? shell = Activator.CreateInstance(t);
+        if (shell == null) return;
+        object? shortcut = null;
+        try
+        {
+            shortcut = t.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, [shortcutPath]);
+            if (shortcut == null) return;
+            var st = shortcut.GetType();
+            st.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, [targetPath]);
+            st.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, [workingDirectory]);
+            st.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, [description]);
+            st.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, [iconLocation]);
+            st.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+        }
+        finally
+        {
+            if (shortcut != null)
+                Marshal.FinalReleaseComObject(shortcut);
+            Marshal.FinalReleaseComObject(shell);
+        }
+    }
+
+    private static void TryRemoveStartMenuShortcut()
+    {
+        try
+        {
+            if (File.Exists(StartMenuShortcutPath))
+                File.Delete(StartMenuShortcutPath);
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     /// <summary>
@@ -196,6 +291,8 @@ public static class PerUserInstall
 
         try
         {
+            TryStopProcessesRunningFromInstallDirectory();
+
             Directory.CreateDirectory(InstallDirectory);
             var source = Environment.ProcessPath!;
             var sourceDir = Path.GetDirectoryName(source)!;
@@ -209,13 +306,16 @@ public static class PerUserInstall
         catch (Exception ex)
         {
             System.Windows.MessageBox.Show(
-                "未能复制程序到安装目录（可能被杀软拦截或无权写入）：\n" + ex.Message +
-                "\n\n将尝试从当前位置继续运行。",
+                "未能复制程序到安装目录（可能被杀软拦截、旧进程未退出导致文件被占用、或无权写入）：\n" +
+                ex.Message +
+                "\n\n可在任务管理器中结束「ClipboardManager」后重试，或注销/重启后再试。\n" +
+                "将尝试从当前位置继续运行。",
                 DisplayName, System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
             return false;
         }
 
         WriteUninstallRegistry(InstalledExecutablePath);
+        EnsureStartMenuShortcut(InstalledExecutablePath);
 
         try
         {
@@ -239,6 +339,70 @@ public static class PerUserInstall
 
         return true;
 #endif
+    }
+
+    /// <summary>
+    /// 结束「可执行文件路径等于安装目录下 ClipboardManager.exe」的进程，避免覆盖时被 Windows 锁定导致 Access denied。
+    /// 典型场景：卸载后托盘进程未退出、或延迟删除尚未完成。
+    /// </summary>
+    private static void TryStopProcessesRunningFromInstallDirectory()
+    {
+        var want = NormalizePath(InstalledExecutablePath);
+        foreach (var p in Process.GetProcessesByName(
+                     Path.GetFileNameWithoutExtension(InstalledExecutablePath)))
+        {
+            try
+            {
+                string path;
+                try
+                {
+                    path = p.MainModule?.FileName ?? "";
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!string.Equals(NormalizePath(path), want, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    p.CloseMainWindow();
+                }
+                catch
+                {
+                    // 托盘应用常无主窗口
+                }
+
+                try
+                {
+                    if (!p.WaitForExit(2000))
+                        p.Kill(entireProcessTree: false);
+                }
+                catch
+                {
+                    // 已无权限或已退出
+                }
+            }
+            catch
+            {
+                // 单进程忽略
+            }
+            finally
+            {
+                try
+                {
+                    p.Dispose();
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+        }
+
+        Thread.Sleep(400);
     }
 
     /// <summary>将 bin 输出中与运行相关的文件复制到安装目录（不含 .pdb）。</summary>
@@ -265,7 +429,7 @@ public static class PerUserInstall
     {
         var installLocation = InstallDirectory;
         var uninstallCmd = $"\"{exePath}\" --uninstall";
-        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
+        var version = AppInfo.DisplayVersion;
 
         using var key = Registry.CurrentUser.CreateSubKey(
             $@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{UninstallRegistryKeyName}",
