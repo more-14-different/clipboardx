@@ -533,7 +533,9 @@ internal static class FileDialogJumpHelper
         return TryNavigateAddressBarStyle(dialogHwnd, path);
     }
 
-    /// <summary>WPS：无 IShellBrowser，优先 UIA ValuePattern；否则 ComboBoxEx 内嵌 Edit、底部 Edit/RichEdit、Alt+D 地址栏、Ctrl+L。</summary>
+    /// <summary>
+    /// WPS：无 IShellBrowser；含 ComboBoxEx/Edit、ReBar+F4 地址栏（与逍遥 QuickJump ChangePath 同类）、UIA、Alt+D、Ctrl+L。
+    /// </summary>
     private static bool TryNavigateWpsCustom(IntPtr dialogHwnd, string folderPath)
     {
         if (!Directory.Exists(folderPath)) return false;
@@ -565,6 +567,9 @@ internal static class FileDialogJumpHelper
         if (bottomInput != IntPtr.Zero && TryWpsFillEditWithFolderAndEnter(bottomInput, folderWithSlash))
             return true;
 
+        if (TryNavigateReBarF4AddressEdit(dialogHwnd, folderWithSlash, bottomInput))
+            return true;
+
         SendAltD();
         Thread.Sleep(160);
         try
@@ -588,6 +593,81 @@ internal static class FileDialogJumpHelper
         SendEnter();
         Thread.Sleep(120);
         return true;
+    }
+
+    /// <summary>
+    /// 逍遥 QuickJump ChangePath：ReBarWindow32 取焦点后 F4，待键盘焦点落入地址类 Edit 再填路径回车。
+    /// 部分带经典壳的打开/保存窗（含个别 WPS 混合界面）适用。
+    /// </summary>
+    private static bool TryNavigateReBarF4AddressEdit(IntPtr dialogHwnd, string folderWithSlash, IntPtr skipEditHwnd)
+    {
+        var rebar = FindFirstHwndByClass(dialogHwnd, "ReBarWindow32");
+        if (rebar == IntPtr.Zero) return false;
+
+        uint dialogPid;
+        var dialogTid = Win32.GetWindowThreadProcessId(dialogHwnd, out dialogPid);
+        var curTid = Win32.GetCurrentThreadId();
+
+        Win32.AttachThreadInput(curTid, dialogTid, true);
+        try
+        {
+            Win32.SetForegroundWindow(dialogHwnd);
+            Thread.Sleep(50);
+            Win32.SetFocus(rebar);
+            Thread.Sleep(40);
+            SendF4();
+            Thread.Sleep(100);
+
+            for (var i = 0; i < 45; i++)
+            {
+                var h = Win32.GetFocus();
+                if (h != IntPtr.Zero && h != skipEditHwnd && IsWin32PathInputClass(Win32.GetWindowClassName(h)))
+                {
+                    if (TryWpsFillEditWithFolderAndEnter(h, folderWithSlash))
+                        return true;
+                }
+                Thread.Sleep(15);
+            }
+        }
+        finally
+        {
+            Win32.AttachThreadInput(curTid, dialogTid, false);
+        }
+
+        return false;
+    }
+
+    private static IntPtr FindFirstHwndByClass(IntPtr root, string className)
+    {
+        IntPtr found = IntPtr.Zero;
+        void Walk(IntPtr h)
+        {
+            if (found != IntPtr.Zero) return;
+            if (string.Equals(Win32.GetWindowClassName(h), className, StringComparison.OrdinalIgnoreCase))
+            {
+                found = h;
+                return;
+            }
+            Win32.EnumChildWindows(h, (c, _) =>
+            {
+                Walk(c);
+                return true;
+            }, IntPtr.Zero);
+        }
+        Walk(root);
+        return found;
+    }
+
+    private static void SendF4()
+    {
+        const ushort vkF4 = 0x73;
+        var inputs = new Win32.INPUT[2];
+        inputs[0].type = Win32.INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = vkF4;
+        inputs[1].type = Win32.INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = vkF4;
+        inputs[1].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+        Win32.SendInput(2, inputs, Marshal.SizeOf<Win32.INPUT>());
     }
 
     /// <summary>commctrl ComboBoxEx32 内嵌编辑框，常见于地址栏。</summary>
@@ -842,6 +922,12 @@ internal static class FileDialogJumpHelper
         finally { Win32.AttachThreadInput(curTid, dialogTid, false); }
 
         Thread.Sleep(60);
+
+        var folderWithSlash = norm.TrimEnd('\\', '/') + "\\";
+        var bottomEdit = FindBottomMostPathInputHwnd(dialogHwnd);
+        if (TryNavigateReBarF4AddressEdit(dialogHwnd, folderWithSlash, bottomEdit))
+            return true;
+
         SendCtrlL();
         Thread.Sleep(140);
 
