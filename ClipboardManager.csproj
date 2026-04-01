@@ -10,7 +10,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>ClipboardManager</RootNamespace>
     <AssemblyName>ClipboardX</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Product>ClipboardX</Product>
     <Company>ClipboardX</Company>
     <RepositoryUrl>https://github.com/chaojimct/clipboardx</RepositoryUrl>
@@ -31,10 +31,10 @@
     <Compile Remove="tools\**\*" />
   </ItemGroup>
 
-  <!-- 原生 Shell 跳转 DLL：在 Visual Studio 中生成 native\ShellNavigate\ClipboardXShellNavigate.vcxproj（x64 / Win32 Release）后出现即会复制 -->
+  <!-- 原生 Shell 跳转 DLL：须 Link 到输出根目录（与 ShellDialogDeepNavigate 用 BaseDirectory\*.dll 解析一致）；否则默认会落在 native\...\bin\... 子目录下单文件解压后仍找不到 -->
   <ItemGroup>
-    <None Include="native\ShellNavigate\bin\x64\Release\ClipboardXShellNavigate.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('native\ShellNavigate\bin\x64\Release\ClipboardXShellNavigate.dll')" />
-    <None Include="native\ShellNavigate\bin\Win32\Release\ClipboardXShellNavigate32.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('native\ShellNavigate\bin\Win32\Release\ClipboardXShellNavigate32.dll')" />
+    <None Include="native\ShellNavigate\bin\x64\Release\ClipboardXShellNavigate.dll" Link="ClipboardXShellNavigate.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('native\ShellNavigate\bin\x64\Release\ClipboardXShellNavigate.dll')" />
+    <None Include="native\ShellNavigate\bin\Win32\Release\ClipboardXShellNavigate32.dll" Link="ClipboardXShellNavigate32.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('native\ShellNavigate\bin\Win32\Release\ClipboardXShellNavigate32.dll')" />
   </ItemGroup>
 
 </Project>
