@@ -8,6 +8,7 @@ namespace ClipboardManager;
 /// 将原生 DLL 注入文件对话框<strong>宿主进程</strong>，在目标进程内调用
 /// <c>SendMessage(WM_USER+7)</c> 取得 IShellBrowser 并 <c>BrowseObject</c>，
 /// 实现 Shell 命名空间级目录切换（不模拟键盘）。失败时由 <see cref="FileDialogJumpHelper"/> 回退。
+/// 支持 64→32 跨架构注入（通过远程 PE 导出表解析）。
 /// </summary>
 internal static class ShellDialogDeepNavigate
 {
@@ -62,15 +63,18 @@ internal static class ShellDialogDeepNavigate
 
         try
         {
-            if (!IsSameArchAsCurrentProcess(hProcess))
+            var targetIs64 = IsTargetProcess64Bit(hProcess);
+
+            // 32→64 跨架构注入不支持（需要 Heaven's Gate 技术）
+            if (!Environment.Is64BitProcess && targetIs64)
             {
                 ShellNavigateLog.WriteInjector(
-                    $"arch mismatch: skip injection (ClipboardX {(Environment.Is64BitProcess ? "x64" : "x86")}, target pid={pid})");
+                    $"32→64 injection not supported (ClipboardX x86, target pid={pid} x64)");
                 return false;
             }
 
-            var target64 = Environment.Is64BitProcess;
-            var dllFileName = target64 ? "ClipboardXShellNavigate.dll" : "ClipboardXShellNavigate32.dll";
+            var crossArch = Environment.Is64BitProcess != targetIs64;
+            var dllFileName = targetIs64 ? "ClipboardXShellNavigate.dll" : "ClipboardXShellNavigate32.dll";
             var dllFullPath = Path.Combine(AppContext.BaseDirectory, dllFileName);
             if (!File.Exists(dllFullPath))
             {
@@ -79,9 +83,9 @@ internal static class ShellDialogDeepNavigate
             }
 
             ShellNavigateLog.WriteInjector(
-                $"start pid={pid} hwnd=0x{dialogHwnd.ToInt64():X} dll={dllFileName} path={folderPath}");
+                $"start pid={pid} hwnd=0x{dialogHwnd.ToInt64():X} dll={dllFileName} cross={crossArch} path={folderPath}");
 
-            if (!EnsureRemoteDllLoaded(hProcess, dllFullPath, dllFileName, out var remoteBase))
+            if (!EnsureRemoteDllLoaded(hProcess, dllFullPath, dllFileName, crossArch, out var remoteBase))
             {
                 ShellNavigateLog.WriteInjectorWin32(
                     "EnsureRemoteDllLoaded failed", Marshal.GetLastWin32Error());
@@ -90,7 +94,14 @@ internal static class ShellDialogDeepNavigate
 
             ShellNavigateLog.WriteInjector($"remote module 0x{remoteBase.ToInt64():X}");
 
-            var remoteFn = GetRemoteExportAddress(hProcess, remoteBase, dllFullPath, ExportName);
+            var remoteFn = crossArch
+                ? FindExportInRemoteModule(hProcess, remoteBase, ExportName)
+                : GetRemoteExportAddress(hProcess, remoteBase, dllFullPath, ExportName);
+
+            // x86 __stdcall 修饰名回退：_FuncName@参数字节数
+            if (remoteFn == IntPtr.Zero && crossArch)
+                remoteFn = FindExportInRemoteModule(hProcess, remoteBase, $"_{ExportName}@4");
+
             if (remoteFn == IntPtr.Zero)
             {
                 ShellNavigateLog.WriteInjectorWin32("GetRemoteExportAddress failed", Marshal.GetLastWin32Error());
@@ -99,7 +110,7 @@ internal static class ShellDialogDeepNavigate
 
             ShellNavigateLog.WriteInjector($"remote {ExportName} 0x{remoteFn.ToInt64():X}");
 
-            var payload = BuildPayload(dialogHwnd, Path.GetFullPath(folderPath), target64);
+            var payload = BuildPayload(dialogHwnd, Path.GetFullPath(folderPath), targetIs64);
             var pPayload = VirtualAllocEx(hProcess, IntPtr.Zero, (nuint)payload.Length, MemCommit | MemReserve, PageReadWrite);
             if (pPayload == IntPtr.Zero)
             {
@@ -149,14 +160,13 @@ internal static class ShellDialogDeepNavigate
         }
     }
 
-    private static bool IsSameArchAsCurrentProcess(IntPtr hProcess)
+    private static bool IsTargetProcess64Bit(IntPtr hProcess)
     {
         if (!Environment.Is64BitOperatingSystem)
-            return true;
+            return false;
         if (!IsWow64Process(hProcess, out var targetWow))
-            return true;
-        var target64 = !targetWow;
-        return target64 == Environment.Is64BitProcess;
+            return Environment.Is64BitProcess;
+        return !targetWow;
     }
 
     private static byte[] BuildPayload(IntPtr hwnd, string fullPath, bool ptr64)
@@ -182,7 +192,8 @@ internal static class ShellDialogDeepNavigate
         return ms.ToArray();
     }
 
-    private static bool EnsureRemoteDllLoaded(IntPtr hProcess, string dllFullPath, string dllFileName, out IntPtr remoteBase)
+    private static bool EnsureRemoteDllLoaded(
+        IntPtr hProcess, string dllFullPath, string dllFileName, bool crossArch, out IntPtr remoteBase)
     {
         remoteBase = FindRemoteModule(hProcess, dllFileName);
         if (remoteBase != IntPtr.Zero)
@@ -207,10 +218,12 @@ internal static class ShellDialogDeepNavigate
                 return false;
             }
 
-            var loadLib = GetRemoteKernelProcAddress(hProcess, "LoadLibraryW");
+            var loadLib = crossArch
+                ? FindExportInRemoteModule(hProcess, FindRemoteModule(hProcess, "kernel32.dll"), "LoadLibraryW")
+                : GetRemoteKernelProcAddress(hProcess, "LoadLibraryW");
             if (loadLib == IntPtr.Zero)
             {
-                ShellNavigateLog.WriteInjector("GetRemoteKernelProcAddress LoadLibraryW failed");
+                ShellNavigateLog.WriteInjector("Cannot find LoadLibraryW in remote process");
                 return false;
             }
 
@@ -247,6 +260,83 @@ internal static class ShellDialogDeepNavigate
         return remoteBase != IntPtr.Zero;
     }
 
+    /// <summary>
+    /// 从远程进程模块的 PE 导出表中查找函数地址（支持跨架构，即 64 位进程读 32 位模块）。
+    /// </summary>
+    private static IntPtr FindExportInRemoteModule(IntPtr hProcess, IntPtr moduleBase, string exportName)
+    {
+        if (moduleBase == IntPtr.Zero) return IntPtr.Zero;
+
+        var dosHeader = new byte[64];
+        if (!ReadProcessMemory(hProcess, moduleBase, dosHeader, (nuint)dosHeader.Length, out _))
+            return IntPtr.Zero;
+        if (dosHeader[0] != 0x4D || dosHeader[1] != 0x5A)
+            return IntPtr.Zero;
+
+        var e_lfanew = BitConverter.ToInt32(dosHeader, 60);
+        var peAddr = (IntPtr)(moduleBase.ToInt64() + e_lfanew);
+
+        // PE sig(4) + COFF(20) + OptionalHeader 足够覆盖 DataDirectory[0]
+        var peHeader = new byte[264];
+        if (!ReadProcessMemory(hProcess, peAddr, peHeader, (nuint)peHeader.Length, out _))
+            return IntPtr.Zero;
+        if (peHeader[0] != 0x50 || peHeader[1] != 0x45)
+            return IntPtr.Zero;
+
+        var magic = BitConverter.ToUInt16(peHeader, 24);
+        int exportDirOff = magic switch
+        {
+            0x10B => 24 + 96,   // PE32
+            0x20B => 24 + 112,  // PE32+
+            _ => -1
+        };
+        if (exportDirOff < 0) return IntPtr.Zero;
+
+        var exportRva = BitConverter.ToUInt32(peHeader, exportDirOff);
+        if (exportRva == 0) return IntPtr.Zero;
+
+        var exportDir = new byte[40]; // IMAGE_EXPORT_DIRECTORY
+        if (!ReadProcessMemory(hProcess, (IntPtr)(moduleBase.ToInt64() + exportRva), exportDir, (nuint)exportDir.Length, out _))
+            return IntPtr.Zero;
+
+        var numberOfNames = BitConverter.ToInt32(exportDir, 24);
+        var addrOfFunctions = BitConverter.ToUInt32(exportDir, 28);
+        var addrOfNames = BitConverter.ToUInt32(exportDir, 32);
+        var addrOfOrdinals = BitConverter.ToUInt32(exportDir, 36);
+        if (numberOfNames == 0) return IntPtr.Zero;
+
+        var nameRvas = new byte[numberOfNames * 4];
+        if (!ReadProcessMemory(hProcess, (IntPtr)(moduleBase.ToInt64() + addrOfNames), nameRvas, (nuint)nameRvas.Length, out _))
+            return IntPtr.Zero;
+
+        var ordinals = new byte[numberOfNames * 2];
+        if (!ReadProcessMemory(hProcess, (IntPtr)(moduleBase.ToInt64() + addrOfOrdinals), ordinals, (nuint)ordinals.Length, out _))
+            return IntPtr.Zero;
+
+        var wantBytes = Encoding.ASCII.GetBytes(exportName);
+        var nameBuf = new byte[256];
+        for (var i = 0; i < numberOfNames; i++)
+        {
+            var nameRva = BitConverter.ToUInt32(nameRvas, i * 4);
+            if (!ReadProcessMemory(hProcess, (IntPtr)(moduleBase.ToInt64() + nameRva), nameBuf, (nuint)nameBuf.Length, out _))
+                continue;
+            var nullIdx = Array.IndexOf(nameBuf, (byte)0);
+            if (nullIdx < 0) nullIdx = nameBuf.Length;
+            if (nullIdx != wantBytes.Length || !nameBuf.AsSpan(0, nullIdx).SequenceEqual(wantBytes))
+                continue;
+
+            var ordinal = BitConverter.ToUInt16(ordinals, i * 2);
+            var funcRvaBytes = new byte[4];
+            if (!ReadProcessMemory(hProcess, (IntPtr)(moduleBase.ToInt64() + addrOfFunctions + ordinal * 4), funcRvaBytes, 4, out _))
+                return IntPtr.Zero;
+            var funcRva = BitConverter.ToUInt32(funcRvaBytes, 0);
+            return (IntPtr)(moduleBase.ToInt64() + funcRva);
+        }
+
+        return IntPtr.Zero;
+    }
+
+    /// <summary>同架构快速路径：本地加载 DLL 计算 RVA。</summary>
     private static IntPtr GetRemoteExportAddress(IntPtr hProcess, IntPtr remoteModule, string localDllPath, string exportName)
     {
         var localMod = LoadLibraryW(localDllPath);
@@ -266,6 +356,7 @@ internal static class ShellDialogDeepNavigate
         }
     }
 
+    /// <summary>同架构快速路径：本地 kernel32 RVA 映射到远程。</summary>
     private static IntPtr GetRemoteKernelProcAddress(IntPtr hProcess, string procName)
     {
         var localK = GetModuleHandleW("kernel32.dll");
@@ -318,6 +409,9 @@ internal static class ShellDialogDeepNavigate
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, nuint nSize, out UIntPtr lpNumberOfBytesWritten);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, nuint nSize, out UIntPtr lpNumberOfBytesRead);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, nuint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);

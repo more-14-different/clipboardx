@@ -2,7 +2,7 @@
 
 **[下载最新版 (Releases)](https://github.com/chaojimct/clipboardx/releases)** · [源码](https://github.com/chaojimct/clipboardx)
 
-轻量级 Windows **剪贴板历史**工具：**弹出面板不抢焦点**（`WS_EX_NOACTIVATE`）。
+轻量级 Windows **剪贴板历史 + 文件对话框跳转**二合一工具：剪贴板弹窗**不抢焦点**（`WS_EX_NOACTIVATE`），并支持在「打开 / 保存」等窗口中一键跳转到资源管理器或常用目录（默认 **Ctrl+G**）。
 
 ## 演示
 
@@ -18,7 +18,7 @@
 
 ## 下载与安装
 
-1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在 Assets 中选 zip（版本号以发布页为准，例如 **1.1.4**）：
+1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在 Assets 中选 zip（版本号以发布页为准，例如 **1.1.5**）：
    - **`ClipboardX-*-win-x64-no-runtime.zip`** — 体积小，需已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
    - **`ClipboardX-*-win-x64-self-contained.zip`** — 自带运行时，无需单独装 .NET
 2. 解压后运行 **`ClipboardX.exe`**。从临时目录启动时，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并可在「应用和功能」中卸载；托盘 **关于** 可查看版本与主页。
@@ -33,15 +33,34 @@
 ## 特性（剪贴板）
 
 - **不抢焦点** — 原窗口保持输入焦点，适合 IDE / 聊天等场景  
-- **实时搜索** — 弹出后直接输入过滤；热键与键盘逻辑在独立钩子里处理  
-- **多格式** — 文本、图片、文件列表；图片可显示缩略图  
-- **全局热键** — 默认 **Ctrl+`**（反引号），可在设置修改  
-- **快捷操作** — ↑↓、Enter 粘贴、Esc、Backspace 删搜索字符  
-- **弹窗位置** — 文本光标或鼠标附近（可配置）  
-- **去重** — 重复内容提升到顶部  
-- **主题** — 跟随系统 / 亮 / 暗（Catppuccin Mocha）  
-- **配置** — 设置写入 `%AppData%\ClipboardX`（从旧名 **ClipboardManager** 迁移时会带上 `settings.json`）；**普通剪贴板历史**持久化在 `%LocalAppData%\ClipboardX\clipboard_history.db`（SQLite）  
-- **文件对话框跳转** — 见下节（默认 **Ctrl+G**，勿与呼出剪贴板热键重复）
+- **实时搜索** — 弹出后直接输入过滤；热键走低级键盘钩，不必先点搜索框  
+- **拼音检索** — 全拼 / 首字母匹配中文历史（依赖 NPinyin）  
+- **多格式** — 文本、图片、文件路径列表；图片可显示缩略图  
+- **类型筛选** — 面板顶栏在「全部 / 文本 / 图片 / 文件」间切换  
+- **快捷短语** — 列表项 **右键 → 设为快捷短语**，绑定关键词后固定参与列表；可切到 **⚡ 短语** 只显示短语项（仍支持搜索）  
+- **图片** — 剪贴板图片在列表中 **右键**，可将图片 **粘贴为文件** 到当前资源管理器窗口（适用时）  
+- **数字粘贴** — **面板主键**（默认 Ctrl，可改为 Alt / Win / CapsLock）+ **1～9** 粘贴对应可见条目（与设置中「面板主键」一致）  
+- **全局热键** — 默认 **Ctrl+`**（反引号）呼出面板，**设置**中可改；勿与 **文件对话框跳转热键**重复  
+- **其它操作** — ↑↓ 选择、Enter 粘贴、Esc、Backspace 删筛选字符、←→ 翻页；可拖动标题栏微调位置（不抢焦点策略下仍尽量跟光标/鼠标）  
+- **去重** — 重复内容复制后提升到顶部  
+- **预览** — **设置 → 预览行数** 控制每条历史的展示行数  
+- **透明度 / 主题** — 弹窗透明度滑块；主题：跟随系统 / 亮 / 暗（Catppuccin Mocha）  
+- **持久化** — 见下文「数据与日志」；首次运行若发现旧版 **ClipboardManager** 配置会自动迁移  
+
+## 设置与托盘
+
+### 设置（两个选项卡）
+
+| 选项卡 | 内容 |
+|--------|------|
+| **常规** | 最大记录数；**呼出快捷键**；**文件对话框跳转键**；跳转列表弹出**延时**（0～10000 ms，0 为立即；延时内再按一次跳转键会直接跳当前预选项）；**Shell 注入跳转**开关；**点击后自动跳转**；外观**主题**、**弹出位置**（光标旁 / 鼠标旁）、**透明度**；**预览行数**；**面板主键**；**开机自启动**；**点击外部隐藏**剪贴板面板；**清空所有历史**（快捷短语仍保留在 `settings.json`） |
+| **自定义文件对话框** | 针对内置识别为「无」的窗口：规则列表、删除、**运行探测向导**、**导入（合并 / 替换）**、**导出**；底部显示规则文件路径 |
+
+首次关闭设置时若点 **保存**，上述常规项写入 **`settings.json`**；自定义规则在导入/删除/向导成功时已写入 **`custom_file_dialogs.json`**，与是否点「保存」无关。
+
+### 托盘
+
+右键菜单：**显示**（含当前呼出热键提示）、**设置**、**关于**、**检查更新…**、**添加自定义文件对话框…**（与设置中探测向导相同流程）、**卸载…**、**退出**。**双击托盘图标**等同于打开剪贴板面板。（以 **`dotnet run` / Debug** 运行时，托盘会多一项 **采集窗口信息**，用于开发调试。）
 
 ## 文件对话框跳转
 
@@ -54,6 +73,12 @@
 
 - **WPS**：用界面自动化、面包屑、**ReBar + F4** 地址栏等策略（思路参考 [XiaoYao_QuickJump](https://github.com/lch319/XiaoYao_QuickJump)），**不**做 Shell DLL 注入。  
 - **系统公共对话框**：可注入宿主走 `IShellBrowser::BrowseObject`；失败则回退地址栏模拟。可在 **设置** 中关闭 **「Shell 注入跳转」**（默认开启），遇杀软拦截时只用模拟方式，兼容更好。
+
+### 自定义文件对话框
+
+若某窗口**未被内置识别**为文件对话框，可在 **设置 → 自定义文件对话框** 中维护规则（按**窗口类名 + 进程名**等匹配，可选 **标题包含**）。JSON 与 **`%AppData%\ClipboardX\custom_file_dialogs.json`** 一致。**运行探测向导**（或托盘 **添加自定义文件对话框…**）会按内置顺序依次尝试多种策略（如 `shell_inject`、`sys_listview`、`address_bar`、WPS 综合链、`qt_alt_n`、`alt_d_value_enter`、`ctrl_l_type_enter` 等），用宽松 UI 自动化读取当前路径做校验；命中后会把**优先策略**记入规则。**探测前**请保证对话框当前**不在**用于校验的目标文件夹内，并准备好有效目标路径（如 **上次在对话框里记录的路径** 或剪贴板中的目录路径）。
+
+向导与 **导入/导出** 的说明亦见 **设置** 选项卡内文案。
 
 ### 行为概要
 
@@ -69,7 +94,76 @@
 
 ### 跳转列表里的操作
 
-与主剪贴板面板类似：**↑↓** 选择，**←→** 翻页，**单击行** 或 **Enter** 确认跳转，**Esc** 清搜索 / 关闭，**主键+1～9** 快速跳可见项，输入字符过滤（含收藏关键词），**右键** 收藏与管理。**点击外部**是否关列表与设置 **「点击外部隐藏」** 一致。
+与主剪贴板面板类似：**↑↓** 选择，**←→** 翻页，**单击行** 或 **Enter** 确认跳转，**Esc** 清搜索 / 关闭，**主键+1～9** 快速跳可见项，输入字符过滤（含收藏别名）。**右键** 可将路径 **加入收藏**（可设关键词）或管理已收藏项，数据在 **`settings.json`**。**点击外部**是否关列表与设置 **「点击外部隐藏」** 一致。
+
+## 与其它工具对比
+
+以下为与常见同类软件的**差异对照**，便于选型；各工具随版本迭代，具体以官方说明为准。
+
+### 剪贴板历史（Ditto、CopyQ）
+
+| 特性 | ClipboardX | Ditto | CopyQ |
+|------|------------|-------|-------|
+| 弹窗是否抢焦点 | **不抢**（`WS_EX_NOACTIVATE`） | 抢焦点 | 抢焦点 |
+| 写代码 / 聊天时 | 光标可留在原窗口 | 焦点常切到工具窗 | 焦点常切到工具窗 |
+| 跟**文本光标** | 支持（`GetGUIThreadInfo` 等多级回退） | 一般不支持 | 一般不支持 |
+| 跟**鼠标** | 支持（可配置） | 支持 | 部分支持 |
+
+| 搜索 | ClipboardX | Ditto | CopyQ |
+|------|------------|-------|-------|
+| 弹出后直接打字过滤 | 支持（低级键盘钩） | 常需先点进搜索框 | 常需先聚焦搜索框 |
+| **拼音**（全拼 / 首字母） | 支持 | 无内置 | 无内置 |
+
+| 存储（可配置，默认值供参考） | ClipboardX | Ditto | CopyQ |
+|------|------------|-------|-------|
+| 引擎 | SQLite（WAL） | SQLite 等 | 自有格式 / SQLite |
+| 默认条数规模 | 2000 | 约 500 级 | 约 200 级 |
+| 去重置顶 | 支持 | 可配置 | 视版本而定 |
+
+| 界面 | ClipboardX | Ditto | CopyQ |
+|------|------------|-------|-------|
+| 主题 | 跟随系统 / 亮 / 暗（Catppuccin Mocha） | 传统界面为主 | 可定制，成本较高 |
+| 体量 | .NET 8，少量 NuGet | 体量因版而异 | 依赖 Qt 等，常驻偏高 |
+
+### 文件对话框跳转（Listary、QuickSwitch、逍遥 QuickJump）
+
+| 特性 | ClipboardX | Listary | QuickSwitch | [逍遥 QuickJump](https://github.com/lch319/XiaoYao_QuickJump) |
+|------|--------------|---------|-------------|----------------|
+| 授权 | **开源** | 闭源（有 Pro） | 开源 | 开源 |
+| 产品重心 | **剪贴板 + 跳转** | 全局搜索 + 跳转等 | 服务 **TC / XY / DO** 等 | **WPS** 等增强 |
+| 文件管理器覆盖 | 专用协议 + **白名单 UIA**（十余种量级） | 多种 | **以 TC/XY/DO 为主** | 相对窄 |
+| **WPS** 非 `#32770` 框 | **专门多策略** | 部分场景 | 基本不涉及 | **重点适配** |
+| **Shell 注入**（公共对话框） | **支持**（`IShellBrowser`，可关） | 有类似深度能力 | **无** | **无** |
+| **首次点击自动跳** | **支持**（可关） | 有类似能力 | **无** | **无** |
+
+**路径采集分层（摘录）：** 第一档为资源管理器 COM、Total Commander 消息、XYplorer `WM_COPYDATA`、Directory Opus CLI 等；第二档为 FreeCommander、Double Commander、OneCommander 等在**进程白名单**下的浅层 UI Automation。**ClipboardX** 与 QuickSwitch / 逍遥在覆盖面上侧重点不同：前者在「广谱管理器 + WPS + 二合一」上更均衡；QuickSwitch 在 TC/XY/DO 上极专；逍遥在 **WPS 地址栏** 等路线上与 ClipboardX 有思路交集（如 ReBar + F4）。
+
+### 「二合一」在常驻上的差异
+
+| 若分开装 | ClipboardX |
+|----------|------------|
+| 剪贴板（Ditto / CopyQ…）+ 跳转（Listary / 专精工具…）各一托盘、各一套习惯 | **单进程**：共享主题、设置、热键栈与 UI 基底，托盘只占一格 |
+
+### 小结
+
+| 维度 | ClipboardX |
+|------|------------|
+| 剪贴板弹窗 | **不抢焦点**、可跟光标、**拼音**检索，路径与 Ditto/CopyQ 不同 |
+| 公共「打开/保存」 | 可选 **Shell 深度跳转**，亦可全模拟 |
+| **WPS** | **多策略回退**（自动化、ComboBox、ReBar+F4、快捷键等） |
+| 管理器路径 | **协议 + UIA 白名单**，覆盖面广于「只做两三款管理器」的专用工具 |
+| 开源 | 代码可审（许可以仓库声明为准） |
+
+## 数据与日志
+
+| 位置 | 说明 |
+|------|------|
+| `%AppData%\ClipboardX\settings.json` | 热键、主题、自启动、最大条数、快捷短语、**文件夹收藏**、Shell 注入开关等 |
+| `%AppData%\ClipboardX\custom_file_dialogs.json` | **自定义文件对话框**规则（与设置中导入/导出格式一致） |
+| `%LocalAppData%\ClipboardX\clipboard_history.db` | SQLite：**剪贴板历史**正文（WAL 模式） |
+| `%LocalAppData%\ClipboardX\shell_navigate.log` | **Shell 注入**与相关跳转诊断（UTF-8） |
+
+曾使用旧名称 **ClipboardManager** 的用户：首次启动时若存在 `%AppData%\ClipboardManager\settings.json`，会迁移到上述 **ClipboardX** 目录。
 
 ## 从源码运行
 
@@ -84,8 +178,8 @@ Debug 带控制台；正式发布用 **Release**。工程文件 **`ClipboardMana
 | 目录 | 内容 |
 |------|------|
 | `Views/` | 主弹窗、设置、跳转选择器、`SharedPopupStyles.xaml` |
-| `Models/` | `AppSettings`、剪贴板项、跳转与收藏模型 |
-| `Services/` | 主题、更新、剪贴板门禁、自启动、`AppInfo` |
+| `Models/` | `AppSettings`、自定义对话框规则、剪贴板项、收藏等 |
+| `Services/` | 主题、更新、剪贴板门禁、自定义规则存储、自启动、`AppInfo` |
 | `FileJump/` | 对话框分类、路径收集、Shell 跳转与日志 |
 | `Interop/` | Win32 P/Invoke |
 | `Install/` | 按用户安装 / 卸载 |
@@ -126,7 +220,9 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ## Shell 深度跳转与日志（可选）
 
-仅影响**系统公共**对话框：若运行目录（或单文件解压目录）可见 **`ClipboardXShellNavigate.dll`**（及 32 位宿主用的 **`ClipboardXShellNavigate32.dll`**），会尝试注入并 **`BrowseObject`**；失败则回退 UI/地址栏。**设置 → Shell 注入跳转** 可关掉注入。WPS 等自定义框**从不**注入。
+仅影响 **Win32 类名为 `#32770` 的系统公共对话框**：主程序在输出目录同时提供 **`ClipboardXShellNavigate.dll`（64 位）** 与 **`ClipboardXShellNavigate32.dll`（32 位）** 时，可按**目标进程架构**选择注入模块，从 **64 位 ClipboardX** 向 **32 位**宿主（如 32 位 WPS 内的「浏览」公共对话框）亦可注入；**关闭「Shell 注入跳转」** 后仅走地址栏/键入模拟。WPS **自有 Qt / 非 `#32770`** 对话框**从不**注入。
 
-- **编译 DLL**：`powershell -ExecutionPolicy Bypass -File native\ShellNavigate\build.ps1`（需 MSVC + Windows SDK；可加 **`-InstallBuildTools`** 用 winget 装 VS Build Tools，较慢）。产物会复制到 `bin\...\net8.0-windows\`。若工具集报错，可改 `native\ShellNavigate\ClipboardXShellNavigate.vcxproj` 中 `PlatformToolset`（**v143** / **v142**）与本地一致。
-- **日志**：**`%LocalAppData%\ClipboardX\shell_navigate.log`**（UTF-8）。**inject** 为注入端；**native** 为 DLL 在宿主内写入，便于对照 HRESULT。WPS 等回退时也可能写入 **wps** 等前缀行。
+**设置 → Shell 注入跳转** 可关闭注入（遇杀软拦截时建议仅用模拟路径）。
+
+- **编译 DLL**：`powershell -ExecutionPolicy Bypass -File native\ShellNavigate\build.ps1`（需 MSVC + Windows SDK；可加 **`-InstallBuildTools`** 用 winget 装 VS Build Tools，较慢）。产物会随 `ClipboardManager.csproj` 条件复制到输出根目录。若工具集报错，可改 `native\ShellNavigate\ClipboardXShellNavigate.vcxproj` 中 `PlatformToolset`（**v143** / **v142**）与本地一致。
+- **日志**：**`%LocalAppData%\ClipboardX\shell_navigate.log`**（UTF-8）。**inject** 为托管端写入；**native** 为注入 DLL 在宿主内写入。调试识别与 WPS 等回退时也可关注 **wps**、**custom_fd** 等前缀行。

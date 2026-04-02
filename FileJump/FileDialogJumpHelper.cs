@@ -48,7 +48,12 @@ internal static class FileDialogJumpHelper
         return FileDialogKind.None;
     }
 
-    public static bool IsLikelyFileDialog(IntPtr hwnd) => ClassifyFileDialog(hwnd) != FileDialogKind.None;
+    public static bool IsLikelyFileDialog(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd)) return false;
+        if (ClassifyFileDialog(hwnd) != FileDialogKind.None) return true;
+        return CustomFileDialogStore.FindMatchingRule(hwnd) != null;
+    }
 
     /// <summary>进程主模块基名（小写，无扩展名），用于识别 WPS 套件。</summary>
     private static bool TryGetExeBaseNameLower(IntPtr hwnd, out string name)
@@ -192,7 +197,11 @@ internal static class FileDialogJumpHelper
                || t.Contains("browse", StringComparison.Ordinal);
     }
 
-    public static bool TryReadCurrentFolder(IntPtr hwnd, out string folder)
+    public static bool TryReadCurrentFolder(IntPtr hwnd, out string folder) =>
+        TryReadCurrentFolder(hwnd, out folder, relaxed: false);
+
+    /// <param name="relaxed">为 true 时扩大 UIA 扫描并尝试面包屑解析，便于自定义对话框探测。</param>
+    public static bool TryReadCurrentFolder(IntPtr hwnd, out string folder, bool relaxed)
     {
         folder = "";
         var kind = ClassifyFileDialog(hwnd);
@@ -205,7 +214,10 @@ internal static class FileDialogJumpHelper
             var q = new Queue<AutomationElement>();
             q.Enqueue(root);
             var seen = 0;
-            var maxNodes = kind == FileDialogKind.WpsCustom ? 450 : 150;
+            var maxNodes = relaxed
+                ? 500
+                : kind == FileDialogKind.WpsCustom ? 450 : 150;
+            var allowBreadcrumbInLoop = relaxed || kind == FileDialogKind.WpsCustom;
             while (q.Count > 0 && seen < maxNodes)
             {
                 var el = q.Dequeue();
@@ -228,7 +240,7 @@ internal static class FileDialogJumpHelper
                 }
                 catch { }
 
-                if (kind != FileDialogKind.WpsCustom || best.Length > 0) continue;
+                if (!allowBreadcrumbInLoop || best.Length > 0) continue;
 
                 try
                 {
@@ -256,7 +268,7 @@ internal static class FileDialogJumpHelper
         }
         catch { }
 
-        if (kind == FileDialogKind.WpsCustom && TryReadWpsBreadcrumbOnly(hwnd, out var wpsFolder))
+        if ((relaxed || kind == FileDialogKind.WpsCustom) && TryReadWpsBreadcrumbOnly(hwnd, out var wpsFolder))
         {
             folder = wpsFolder;
             return true;
@@ -531,11 +543,18 @@ internal static class FileDialogJumpHelper
     /// <param name="allowShellInject">为 false 时不注入宿主进程，仅走 UIA/地址栏等模拟（兼容拦截注入的环境）。</param>
     public static bool TryNavigateToFolder(IntPtr dialogHwnd, string folderPath, bool allowShellInject = true)
     {
-        var kind = ClassifyFileDialog(dialogHwnd);
-        if (kind == FileDialogKind.None) return false;
-
         var path = NormalizeFolderPathForNavigation(folderPath);
         if (!Directory.Exists(path)) return false;
+
+        var kind = ClassifyFileDialog(dialogHwnd);
+        var customRule = kind == FileDialogKind.None
+            ? CustomFileDialogStore.FindMatchingRule(dialogHwnd)
+            : null;
+
+        if (kind == FileDialogKind.None && customRule != null)
+            return TryNavigateCustomRule(dialogHwnd, path, allowShellInject, customRule);
+
+        if (kind == FileDialogKind.None) return false;
 
         // #32770 是标准 Shell 对话框，始终支持注入（包括 WPS 进程内弹出的浏览对话框）
         if (allowShellInject
@@ -548,6 +567,162 @@ internal static class FileDialogJumpHelper
         if (kind == FileDialogKind.WpsCustom)
             return TryNavigateWpsCustom(dialogHwnd, path);
         return TryNavigateAddressBarStyle(dialogHwnd, path);
+    }
+
+    /// <summary>
+    /// 在对话框当前不处于 <paramref name="folderPath"/> 时，依次尝试策略并用宽松 UIA 读取校验；
+    /// 成功则将 <paramref name="rule"/>.<see cref="CustomFileDialogRule.PinnedStrategy"/> 设为命中项。
+    /// </summary>
+    public static bool TryProbeCustomStrategies(
+        IntPtr dialogHwnd,
+        string folderPath,
+        bool allowShellInject,
+        CustomFileDialogRule rule)
+    {
+        if (dialogHwnd == IntPtr.Zero || !Win32.IsWindow(dialogHwnd)) return false;
+        var norm = NormalizeFolderPathForNavigation(folderPath);
+        if (!Directory.Exists(norm)) return false;
+
+        if (TryReadCurrentFolder(dialogHwnd, out var before, relaxed: true)
+            && PathsLooselyEqual(before, norm))
+        {
+            ShellNavigateLog.Write("custom_fd",
+                "probe skipped: dialog already at target path (请切换到其他文件夹后再探测)");
+            return false;
+        }
+
+        var order = rule.StrategyOrder is { Count: > 0 }
+            ? rule.StrategyOrder.Where(s => !string.IsNullOrEmpty(s)).ToList()
+            : CustomFileDialogStore.DefaultStrategyOrder.ToList();
+
+        foreach (var s in order)
+        {
+            TryApplyCustomDialogStrategy(s, dialogHwnd, norm, allowShellInject);
+            Thread.Sleep(480);
+            if (TryReadCurrentFolder(dialogHwnd, out var after, relaxed: true)
+                && PathsLooselyEqual(after, norm))
+            {
+                rule.PinnedStrategy = s;
+                ShellNavigateLog.Write("custom_fd", $"probe pinned strategy={s}");
+                return true;
+            }
+        }
+
+        rule.PinnedStrategy = null;
+        return false;
+    }
+
+    private static bool PathsLooselyEqual(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        try
+        {
+            var na = Path.GetFullPath(a).TrimEnd('\\', '/');
+            var nb = Path.GetFullPath(b).TrimEnd('\\', '/');
+            return string.Equals(na, nb, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static List<string> BuildCustomStrategyOrder(CustomFileDialogRule rule)
+    {
+        var source = rule.StrategyOrder is { Count: > 0 }
+            ? rule.StrategyOrder
+            : CustomFileDialogStore.DefaultStrategyOrder.ToList();
+        var order = new List<string>();
+        if (!string.IsNullOrEmpty(rule.PinnedStrategy)
+            && source.Contains(rule.PinnedStrategy, StringComparer.OrdinalIgnoreCase))
+            order.Add(rule.PinnedStrategy);
+        foreach (var s in source)
+        {
+            if (string.IsNullOrEmpty(s)) continue;
+            if (order.Contains(s, StringComparer.OrdinalIgnoreCase)) continue;
+            order.Add(s);
+        }
+
+        return order;
+    }
+
+    private static bool TryNavigateCustomRule(
+        IntPtr dialogHwnd,
+        string path,
+        bool allowShellInject,
+        CustomFileDialogRule rule)
+    {
+        foreach (var s in BuildCustomStrategyOrder(rule))
+        {
+            if (TryApplyCustomDialogStrategy(s, dialogHwnd, path, allowShellInject))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryApplyCustomDialogStrategy(
+        string strategyId,
+        IntPtr dialogHwnd,
+        string normalizedExistingDir,
+        bool allowShellInject)
+    {
+        var id = strategyId.Trim().ToLowerInvariant();
+        try
+        {
+            switch (id)
+            {
+                case "shell_inject":
+                    if (!allowShellInject) return false;
+                    if (!Win32.GetWindowClassName(dialogHwnd).Equals("#32770", StringComparison.Ordinal))
+                        return false;
+                    return ShellDialogDeepNavigate.TryBrowseObjectInject(dialogHwnd, normalizedExistingDir);
+                case "sys_listview":
+                    return TryNavigateSysListViewStyle(dialogHwnd, normalizedExistingDir);
+                case "address_bar":
+                    return TryNavigateAddressBarStyle(dialogHwnd, normalizedExistingDir);
+                case "wps_chain":
+                    return TryNavigateWpsCustom(dialogHwnd, normalizedExistingDir);
+                case "qt_alt_n":
+                {
+                    var folderWithSlash = Path.GetFullPath(normalizedExistingDir).TrimEnd('\\', '/') + "\\";
+                    ActivateDialog(dialogHwnd);
+                    Thread.Sleep(50);
+                    TryNavigateQtFileDialog(dialogHwnd, folderWithSlash);
+                    return true;
+                }
+                case "alt_d_value_enter":
+                    ActivateDialog(dialogHwnd);
+                    Thread.Sleep(100);
+                    SendAltD();
+                    Thread.Sleep(160);
+                    if (TrySetFocusedAddressValue(Path.GetFullPath(normalizedExistingDir)))
+                    {
+                        Thread.Sleep(50);
+                        SendEnter();
+                        return true;
+                    }
+
+                    return false;
+                case "ctrl_l_type_enter":
+                    ActivateDialog(dialogHwnd);
+                    Thread.Sleep(60);
+                    SendCtrlL();
+                    Thread.Sleep(120);
+                    SendUnicodeString(Path.GetFullPath(normalizedExistingDir));
+                    Thread.Sleep(50);
+                    SendEnter();
+                    return true;
+                default:
+                    ShellNavigateLog.Write("custom_fd", $"unknown strategy id={strategyId}");
+                    return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            ShellNavigateLog.Write("custom_fd", $"strategy {strategyId}: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>

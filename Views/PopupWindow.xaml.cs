@@ -1220,9 +1220,17 @@ public partial class PopupWindow : Window
         if (FileDialogJumpHelper.ClassifyFileDialog(fgNow) != FileDialogKind.None)
             return fgNow;
 
+        if (CustomFileDialogStore.FindMatchingRule(fgNow) != null)
+            return fgNow;
+
         if (_fileJumpLastDialogHwnd != IntPtr.Zero
             && Win32.IsWindow(_fileJumpLastDialogHwnd)
             && FileDialogJumpHelper.ClassifyFileDialog(_fileJumpLastDialogHwnd) != FileDialogKind.None)
+            return _fileJumpLastDialogHwnd;
+
+        if (_fileJumpLastDialogHwnd != IntPtr.Zero
+            && Win32.IsWindow(_fileJumpLastDialogHwnd)
+            && CustomFileDialogStore.FindMatchingRule(_fileJumpLastDialogHwnd) != null)
             return _fileJumpLastDialogHwnd;
 
         return IntPtr.Zero;
@@ -1354,7 +1362,8 @@ public partial class PopupWindow : Window
             if (_appSettings == null) return;
             var dlg = _fileJumpAutoArmedDialog;
             if (dlg == IntPtr.Zero || !Win32.IsWindow(dlg)) return;
-            if (FileDialogJumpHelper.ClassifyFileDialog(dlg) == FileDialogKind.None) return;
+            if (FileDialogJumpHelper.ClassifyFileDialog(dlg) == FileDialogKind.None
+                && CustomFileDialogStore.FindMatchingRule(dlg) == null) return;
 
             var fg = Win32.GetForegroundWindow();
             if (fg != IntPtr.Zero && Win32.GetAncestor(fg, Win32.GA_ROOT) != _fileJumpAutoArmedRoot)

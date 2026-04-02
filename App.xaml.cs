@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text;
@@ -142,7 +143,10 @@ public partial class App : Application
             Dispatcher.Invoke(ShowAboutDialog));
         menu.Items.Add("检查更新…", null, (_, _) =>
             _ = CheckForUpdatesAsync());
+#if DEBUG
         menu.Items.Add("采集窗口信息", null, (_, _) => StartWindowInspection());
+#endif
+        menu.Items.Add("添加自定义文件对话框…", null, (_, _) => StartCustomFileDialogWizard());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("卸载…", null, (_, _) =>
             Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
@@ -320,6 +324,7 @@ public partial class App : Application
         }
     }
 
+#if DEBUG
     private async void StartWindowInspection()
     {
         _trayIcon?.ShowBalloonTip(2500, "ClipboardX",
@@ -347,7 +352,107 @@ public partial class App : Application
                 MessageBoxImage.Information);
         });
     }
+#endif
 
+    internal async void StartCustomFileDialogWizard()
+    {
+        _trayIcon?.ShowBalloonTip(2600, "ClipboardX",
+            "3 秒后采集前台窗口并尝试多种跳转校验，请先打开目标文件对话框并切到该窗口…",
+            WinForms.ToolTipIcon.Info);
+        await Task.Delay(3000);
+
+        var hwnd = Win32.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd))
+        {
+            Dispatcher.Invoke(() =>
+                System.Windows.MessageBox.Show("未获取到前台窗口。", "自定义文件对话框",
+                    MessageBoxButton.OK, MessageBoxImage.Warning));
+            return;
+        }
+
+        if (FileDialogJumpHelper.ClassifyFileDialog(hwnd) != FileDialogKind.None)
+        {
+            Dispatcher.Invoke(() =>
+                System.Windows.MessageBox.Show(
+                    "当前窗口已被内置识别为文件对话框（对话框识别不是 None），不会走自定义规则。\n请仅对内置识别为「无」的窗口使用本功能。",
+                    "自定义文件对话框",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information));
+            return;
+        }
+
+        var probePath = ResolveCustomDialogProbePath();
+        if (string.IsNullOrEmpty(probePath) || !Directory.Exists(probePath))
+        {
+            Dispatcher.Invoke(() =>
+                System.Windows.MessageBox.Show(
+                    "无法确定用于校验的有效文件夹路径。\n请先在任意已支持跳转的对话框里浏览到目标文件夹（更新「上次路径」），或复制某个已存在目录的完整路径到剪贴板后再试。",
+                    "自定义文件对话框",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning));
+            return;
+        }
+
+        var confirm = Dispatcher.Invoke(() =>
+            System.Windows.MessageBox.Show(
+                "将依次尝试多种跳转方式，并通过读取当前路径判断是否已进入下列文件夹：\n\n" +
+                probePath +
+                "\n\n请确认该文件对话框当前**不在**此文件夹内，否则会误判。\n\n确定开始探测？",
+                "自定义文件对话框",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question));
+
+        if (confirm != MessageBoxResult.OK) return;
+
+        var rule = CustomFileDialogRule.CreateFromWindow(hwnd);
+        rule.StrategyOrder = CustomFileDialogStore.DefaultStrategyOrder.ToList();
+
+        var ok = Dispatcher.Invoke(() =>
+            FileDialogJumpHelper.TryProbeCustomStrategies(hwnd, probePath, _settings.EnableShellNavigateInject, rule));
+
+        CustomFileDialogStore.UpsertRule(rule);
+
+        Dispatcher.Invoke(() =>
+        {
+            var msg = ok
+                ? $"已保存。已锁定优先策略：{rule.PinnedStrategy}"
+                : "已保存。未能自动校验出有效策略，跳转时将按顺序依次尝试。\n建议：把对话框切换到其他文件夹后，可从托盘再运行一次本向导。";
+            System.Windows.MessageBox.Show(msg, "自定义文件对话框", MessageBoxButton.OK,
+                ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        });
+    }
+
+    private string? ResolveCustomDialogProbePath()
+    {
+        var mem = _settings.LastFileDialogFolder?.Trim();
+        if (!string.IsNullOrEmpty(mem))
+        {
+            try
+            {
+                var full = Path.GetFullPath(mem);
+                if (Directory.Exists(full)) return full;
+            }
+            catch { /* ignore */ }
+        }
+
+        try
+        {
+            var clip = System.Windows.Clipboard.GetText()?.Trim();
+            if (string.IsNullOrEmpty(clip)) return null;
+            var line = clip.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .FirstOrDefault(s => s.Length > 0);
+            if (string.IsNullOrEmpty(line)) return null;
+            var full = Path.GetFullPath(line);
+            return Directory.Exists(full) ? full : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+#if DEBUG
     private static string CollectWindowInfo(IntPtr hwnd)
     {
         var className = Win32.GetWindowClassName(hwnd);
@@ -383,6 +488,7 @@ public partial class App : Application
         catch { /* ignore */ }
 
         var kind = FileDialogJumpHelper.ClassifyFileDialog(hwnd);
+        var customHit = CustomFileDialogStore.FindMatchingRule(hwnd);
 
         var childClasses = new List<string>();
         Win32.EnumChildWindows(hwnd, (ch, _) =>
@@ -403,6 +509,17 @@ public partial class App : Application
         if (!string.IsNullOrEmpty(uiaName) && uiaName != title)
             output.AppendLine($"UIA名称: {uiaName}");
         output.AppendLine($"对话框识别: {kind}");
+        if (kind == FileDialogKind.None)
+        {
+            if (customHit != null)
+            {
+                var pin = string.IsNullOrEmpty(customHit.PinnedStrategy) ? "按序尝试" : customHit.PinnedStrategy;
+                output.AppendLine($"自定义跳转: 已保存（优先：{pin}）");
+            }
+            else
+                output.AppendLine("自定义跳转: 未保存（设置 → 自定义文件对话框，或托盘向导）");
+        }
+
         output.AppendLine();
 
         if (childClasses.Count > 0)
@@ -449,6 +566,7 @@ public partial class App : Application
 
         return output.ToString();
     }
+#endif
 
     /// <summary>与托盘相同图稿，用于 WPF 窗口标题栏。</summary>
     public static ImageSource GetWindowIconSource()
