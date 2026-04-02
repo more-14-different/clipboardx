@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClipboardX — 不抢焦点的剪贴板历史 + 文件对话框跳转</title>
+<meta name="description" content="ClipboardX 是一个轻量级 Windows 效率工具，集成剪贴板历史管理和文件对话框路径跳转，开源免费。">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#1e1e2e;--surface:#313244;--surface2:#45475a;--overlay:#585b70;
+  --text:#cdd6f4;--subtext:#a6adc8;--blue:#89b4fa;--green:#a6e3a1;
+  --pink:#f5c2e7;--peach:#fab387;--yellow:#f9e2af;--red:#f38ba8;
+  --mauve:#cba6f7;--teal:#94e2d5;
+  --radius:12px;--max-w:1080px;
+}
+html{scroll-behavior:smooth}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;background:var(--bg);color:var(--text);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--blue);text-decoration:none;transition:opacity .2s}
+a:hover{opacity:.8}
+img{max-width:100%;border-radius:var(--radius)}
+
+/* --- nav --- */
+nav{position:sticky;top:0;z-index:100;backdrop-filter:blur(16px);background:rgba(30,30,46,.8);border-bottom:1px solid var(--surface2)}
+nav .inner{max-width:var(--max-w);margin:0 auto;display:flex;align-items:center;justify-content:space-between;padding:12px 24px}
+nav .logo{font-size:1.2rem;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}
+nav .logo span{color:var(--blue)}
+nav .links{display:flex;gap:20px;align-items:center;font-size:.9rem}
+nav .links a{color:var(--subtext)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 20px;border-radius:8px;font-weight:600;font-size:.9rem;transition:all .2s;border:none;cursor:pointer}
+.btn-primary{background:var(--blue);color:var(--bg)}
+.btn-primary:hover{opacity:.85;color:var(--bg)}
+.btn-outline{border:1.5px solid var(--surface2);color:var(--text);background:transparent}
+.btn-outline:hover{border-color:var(--blue);color:var(--blue)}
+
+/* --- hero --- */
+.hero{max-width:var(--max-w);margin:0 auto;padding:80px 24px 48px;text-align:center}
+.hero h1{font-size:2.8rem;font-weight:800;letter-spacing:-.02em;line-height:1.2;margin-bottom:16px}
+.hero h1 em{font-style:normal;color:var(--blue)}
+.hero p{font-size:1.15rem;color:var(--subtext);max-width:640px;margin:0 auto 32px}
+.hero .actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.badge-row{display:flex;gap:8px;justify-content:center;margin-top:24px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:600;background:var(--surface);color:var(--subtext)}
+.badge .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+
+/* --- section --- */
+section{max-width:var(--max-w);margin:0 auto;padding:64px 24px}
+.section-title{font-size:1.8rem;font-weight:700;margin-bottom:8px;text-align:center}
+.section-sub{color:var(--subtext);text-align:center;margin-bottom:48px;font-size:1rem}
+
+/* --- demo --- */
+.demo-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start}
+.demo-card{background:var(--surface);border-radius:var(--radius);overflow:hidden;border:1px solid var(--surface2)}
+.demo-card .label{padding:14px 20px;font-weight:600;font-size:.95rem;display:flex;align-items:center;gap:8px}
+.demo-card img{width:100%;display:block;border-radius:0}
+
+/* --- features --- */
+.feat-group{margin-bottom:56px}
+.feat-group h3{font-size:1.3rem;font-weight:700;margin-bottom:24px;padding-left:12px;border-left:3px solid var(--blue)}
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.feat-card{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:24px;transition:border-color .2s}
+.feat-card:hover{border-color:var(--blue)}
+.feat-card .icon{font-size:1.5rem;margin-bottom:10px}
+.feat-card h4{font-size:1rem;font-weight:600;margin-bottom:6px}
+.feat-card p{font-size:.88rem;color:var(--subtext);line-height:1.6}
+
+/* --- compare --- */
+.compare-block{margin-bottom:40px}
+.compare-block h3{font-size:1.15rem;font-weight:700;margin-bottom:16px;color:var(--subtext)}
+table{width:100%;border-collapse:collapse;font-size:.88rem;background:var(--surface);border-radius:var(--radius);overflow:hidden}
+thead{background:var(--surface2)}
+th,td{padding:10px 16px;text-align:left;border-bottom:1px solid var(--surface2)}
+th{font-weight:600;color:var(--subtext);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em}
+td:first-child{font-weight:600}
+.y{color:var(--green)}
+.n{color:var(--overlay)}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.78rem;font-weight:600}
+.tag-green{background:rgba(166,227,161,.12);color:var(--green)}
+.tag-blue{background:rgba(137,180,250,.12);color:var(--blue)}
+.tag-peach{background:rgba(250,179,135,.12);color:var(--peach)}
+
+/* --- download --- */
+.dl-cards{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.dl-card{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:28px;text-align:center}
+.dl-card h4{font-size:1.05rem;margin-bottom:8px}
+.dl-card p{font-size:.85rem;color:var(--subtext);margin-bottom:16px}
+.dl-card .btn{width:100%;justify-content:center}
+
+/* --- footer --- */
+footer{border-top:1px solid var(--surface2);margin-top:48px;padding:32px 24px;text-align:center;color:var(--overlay);font-size:.85rem}
+footer a{color:var(--subtext)}
+
+/* --- responsive --- */
+@media(max-width:720px){
+  .hero h1{font-size:1.9rem}
+  .demo-grid,.dl-cards{grid-template-columns:1fr}
+  .feat-grid{grid-template-columns:1fr}
+  nav .links .hide-m{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- nav -->
+<nav>
+  <div class="inner">
+    <a class="logo" href="#">📋 <span>ClipboardX</span></a>
+    <div class="links">
+      <a href="#features" class="hide-m">功能</a>
+      <a href="#compare" class="hide-m">对比</a>
+      <a href="#download" class="hide-m">下载</a>
+      <a class="btn btn-outline" href="https://github.com/chaojimct/clipboardx" target="_blank">⭐ GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<!-- hero -->
+<div class="hero">
+  <h1>不抢焦点的剪贴板历史<br>+ 开源的 <em>Listary 式</em>文件对话框跳转</h1>
+  <p>一个轻量原生 Windows 工具，用一份内存同时替代 Ditto/CopyQ 的剪贴板管理和 Listary/逍遥快跳 的对话框跳转。</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="https://github.com/chaojimct/clipboardx/releases">⬇ 下载最新版</a>
+    <a class="btn btn-outline" href="https://github.com/chaojimct/clipboardx" target="_blank">查看源码</a>
+  </div>
+  <div class="badge-row">
+    <span class="badge"><span class="dot" style="background:var(--green)"></span> 开源免费</span>
+    <span class="badge"><span class="dot" style="background:var(--blue)"></span> .NET 8 / WPF</span>
+    <span class="badge"><span class="dot" style="background:var(--peach)"></span> Windows 10/11</span>
+    <span class="badge"><span class="dot" style="background:var(--mauve)"></span> 仅 3 个依赖</span>
+  </div>
+</div>
+
+<!-- demo -->
+<section id="demo">
+  <h2 class="section-title">效果演示</h2>
+  <p class="section-sub">所见即所得，两个核心场景</p>
+  <div class="demo-grid">
+    <div class="demo-card">
+      <div class="label">📋 剪贴板历史 <span style="color:var(--subtext);font-weight:400;font-size:.82rem">— 不抢焦点 · 拼音搜索</span></div>
+      <img src="https://raw.githubusercontent.com/chaojimct/clipboardx/master/static/clipx.gif" alt="剪贴板弹窗演示" loading="lazy">
+    </div>
+    <div class="demo-card">
+      <div class="label">📂 文件对话框跳转 <span style="color:var(--subtext);font-weight:400;font-size:.82rem">— 热键一键跳转</span></div>
+      <img src="https://raw.githubusercontent.com/chaojimct/clipboardx/master/static/jumpx.gif" alt="文件对话框跳转演示" loading="lazy">
+    </div>
+  </div>
+</section>
+
+<!-- features -->
+<section id="features">
+  <h2 class="section-title">功能亮点</h2>
+  <p class="section-sub">两大核心场景，一个应用搞定</p>
+
+  <div class="feat-group">
+    <h3>剪贴板历史</h3>
+    <div class="feat-grid">
+      <div class="feat-card">
+        <div class="icon">🎯</div>
+        <h4>不抢焦点</h4>
+        <p>基于 <code>WS_EX_NOACTIVATE</code> 三层保障，弹窗全程不夺取焦点。IDE 写代码、聊天打字时呼出面板，光标和输入法状态始终不变。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">📍</div>
+        <h4>跟随文本光标</h4>
+        <p>弹窗出现在你正在输入的位置旁边，而非屏幕中央。通过 <code>GetGUIThreadInfo</code>、<code>GetCaretPos</code>、UI Automation 三级降级获取光标坐标。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">🔍</div>
+        <h4>拼音搜索</h4>
+        <p>弹窗后直接打字过滤，无需聚焦搜索框。支持全拼和首字母——敲 <code>nr</code> 即可匹配「内容」，不用切输入法。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">🗃️</div>
+        <h4>多格式 + 去重</h4>
+        <p>文本、图片（带缩略图）、文件列表。重复内容自动去重并置顶，默认保存 2000 条，SQLite WAL 模式持久化。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">🎨</div>
+        <h4>Catppuccin 主题</h4>
+        <p>暗色模式采用 Catppuccin Mocha 配色，支持亮色 / 暗色 / 跟随系统自动切换，圆角卡片现代设计。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">⚡</div>
+        <h4>快捷短语</h4>
+        <p>在设置中预置常用文本片段，搜索时优先展示，一键粘贴常用内容。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="feat-group">
+    <h3>文件对话框跳转</h3>
+    <div class="feat-grid">
+      <div class="feat-card">
+        <div class="icon">🚀</div>
+        <h4>Shell 深度注入</h4>
+        <p>通过 C++ 原生 DLL 注入，调用 <code>IShellBrowser::BrowseObject</code> 直接导航——与资源管理器树点击效果一致，无地址栏闪烁副作用。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">📁</div>
+        <h4>15+ 种文件管理器</h4>
+        <p>资源管理器、Total Commander、XYplorer、Directory Opus 走专用协议；FreeCommander、Double Commander 等走 UIA 白名单，覆盖面最广。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">📝</div>
+        <h4>WPS 深度适配</h4>
+        <p>WPS 非标准对话框采用六重降级策略：ValuePattern → ComboBoxEx → Edit → ReBar+F4 → Alt+D → Ctrl+L，覆盖 WPS 文字/表格/演示全系列。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">🖱️</div>
+        <h4>首次点击自动跳</h4>
+        <p>文件对话框打开后，第一次在框内点击鼠标即自动跳转到推测路径。无需按任何热键，同一对话框仅触发一次。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">🔄</div>
+        <h4>多级回退</h4>
+        <p>Shell 注入失败时自动降级为地址栏模拟；可在设置中关闭注入以兼容杀软拦截，x64 / x86 双架构自动匹配。</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon">⭐</div>
+        <h4>收藏与记忆</h4>
+        <p>支持收藏常用路径、自动记忆上次对话框目录，在跳转列表中统一展示和搜索。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- compare -->
+<section id="compare">
+  <h2 class="section-title">同类对比</h2>
+  <p class="section-sub">看看与主流工具的差异</p>
+
+  <div class="compare-block">
+    <h3>剪贴板：ClipboardX vs Ditto vs CopyQ</h3>
+    <table>
+      <thead><tr><th>特性</th><th>ClipboardX</th><th>Ditto</th><th>CopyQ</th></tr></thead>
+      <tbody>
+        <tr><td>不抢焦点</td><td class="y">✔ 三层保障</td><td class="n">✘</td><td class="n">✘</td></tr>
+        <tr><td>跟随文本光标</td><td class="y">✔ 三级降级</td><td class="n">✘</td><td class="n">✘</td></tr>
+        <tr><td>拼音搜索</td><td class="y">✔ 全拼+首字母</td><td class="n">✘</td><td class="n">✘</td></tr>
+        <tr><td>即时搜索</td><td class="y">✔ 直接打字</td><td>需聚焦搜索框</td><td>需聚焦搜索框</td></tr>
+        <tr><td>暗色主题</td><td class="y">Catppuccin · 跟随系统</td><td>有限</td><td>需手写 CSS</td></tr>
+        <tr><td>默认历史上限</td><td>2000 条</td><td>500 条</td><td>200 条</td></tr>
+        <tr><td>自动去重</td><td class="y">✔ 去重并置顶</td><td>可配置</td><td class="n">✘</td></tr>
+        <tr><td>文件对话框跳转</td><td class="y">✔ 内置</td><td class="n">✘</td><td class="n">✘</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="compare-block">
+    <h3>文件对话框跳转：ClipboardX vs Listary vs AHK 系（QuickSwitch / 逍遥快跳）</h3>
+    <table>
+      <thead><tr><th>特性</th><th>ClipboardX</th><th>Listary</th><th>AHK 系</th></tr></thead>
+      <tbody>
+        <tr><td>技术栈</td><td><span class="tag tag-green">C# + C++ DLL</span></td><td><span class="tag tag-blue">C++ 原生</span></td><td><span class="tag tag-peach">AutoHotkey</span></td></tr>
+        <tr><td>跳转原理</td><td class="y">Shell 注入 BrowseObject</td><td>Shell 接口</td><td>模拟键盘输入</td></tr>
+        <tr><td>跳转副作用</td><td class="y">无</td><td class="y">无</td><td class="n">可能闪烁/覆盖文件名</td></tr>
+        <tr><td>注入失败回退</td><td class="y">✔ 自动降级</td><td class="y">✔</td><td class="n">仅模拟</td></tr>
+        <tr><td>支持管理器数</td><td class="y">15+</td><td>10+</td><td>4~6</td></tr>
+        <tr><td>WPS 适配</td><td class="y">✔ 六重降级</td><td>部分</td><td>逍遥快跳基础适配</td></tr>
+        <tr><td>首次点击自动跳</td><td class="y">✔</td><td class="n">✘</td><td class="n">✘</td></tr>
+        <tr><td>开源</td><td class="y">✔</td><td class="n">✘ 闭源收费</td><td class="y">✔</td></tr>
+        <tr><td>剪贴板管理</td><td class="y">✔ 内置</td><td class="n">✘</td><td class="n">✘</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- download -->
+<section id="download">
+  <h2 class="section-title">下载使用</h2>
+  <p class="section-sub">支持 Windows 10 / 11，解压即用</p>
+  <div class="dl-cards">
+    <div class="dl-card">
+      <h4>🪶 精简包</h4>
+      <p>体积更小，需已安装 <a href="https://dotnet.microsoft.com/download/dotnet/8.0" target="_blank">.NET 8 桌面运行时</a></p>
+      <a class="btn btn-outline" href="https://github.com/chaojimct/clipboardx/releases">ClipboardX-*-no-runtime.zip</a>
+    </div>
+    <div class="dl-card">
+      <h4>📦 完整包</h4>
+      <p>自带运行时，无需额外安装任何依赖</p>
+      <a class="btn btn-primary" href="https://github.com/chaojimct/clipboardx/releases">ClipboardX-*-self-contained.zip</a>
+    </div>
+  </div>
+</section>
+
+<!-- footer -->
+<footer>
+  <p>
+    <a href="https://github.com/chaojimct/clipboardx" target="_blank">GitHub</a> ·
+    <a href="https://github.com/chaojimct/clipboardx/releases" target="_blank">Releases</a> ·
+    <a href="https://github.com/chaojimct/clipboardx/issues" target="_blank">反馈问题</a>
+  </p>
+  <p style="margin-top:8px">ClipboardX — 轻量、开源、不抢焦点</p>
+</footer>
+
+</body>
+</html>

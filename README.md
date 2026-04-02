@@ -226,3 +226,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 - **编译 DLL**：`powershell -ExecutionPolicy Bypass -File native\ShellNavigate\build.ps1`（需 MSVC + Windows SDK；可加 **`-InstallBuildTools`** 用 winget 装 VS Build Tools，较慢）。产物会随 `ClipboardManager.csproj` 条件复制到输出根目录。若工具集报错，可改 `native\ShellNavigate\ClipboardXShellNavigate.vcxproj` 中 `PlatformToolset`（**v143** / **v142**）与本地一致。
 - **日志**：**`%LocalAppData%\ClipboardX\shell_navigate.log`**（UTF-8）。**inject** 为托管端写入；**native** 为注入 DLL 在宿主内写入。调试识别与 WPS 等回退时也可关注 **wps**、**custom_fd** 等前缀行。
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE)（版权所有 © 2026 mact）。第三方依赖（如 NuGet 包、原生组件）受其各自许可证约束。
