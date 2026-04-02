@@ -1,6 +1,6 @@
 # ClipboardX
 
-**[下载最新版 (Releases)](https://github.com/chaojimct/clipboardx/releases)** · [源码](https://github.com/chaojimct/clipboardx)
+**[下载最新版 (Releases)](https://github.com/chaojimct/clipboardx/releases)** · [官网](https://chaojimct.github.io/clipboardx/) · [源码](https://github.com/chaojimct/clipboardx) · [功能介绍与同类对比](docs/ClipboardX-Introduction.md)
 
 轻量级 Windows **剪贴板历史 + 文件对话框跳转**二合一工具：剪贴板弹窗**不抢焦点**（`WS_EX_NOACTIVATE`），并支持在「打开 / 保存」等窗口中一键跳转到资源管理器或常用目录（默认 **Ctrl+G**）。
 
