@@ -28,8 +28,10 @@
   </ItemGroup>
 
   <!-- tools/ 内为独立小工具，勿随主工程一并编译 -->
+  <!-- ClipboardX/ 为独立 Avalonia 解决方案，与根目录 WPF 无关；勿纳入默认 **\*.cs 扫描 -->
   <ItemGroup>
     <Compile Remove="tools\**\*" />
+    <Compile Remove="ClipboardX\**\*" />
   </ItemGroup>
 
   <!-- 原生 Shell 跳转 DLL：须 Link 到输出根目录（与 ShellDialogDeepNavigate 用 BaseDirectory\*.dll 解析一致）；否则默认会落在 native\...\bin\... 子目录下单文件解压后仍找不到 -->

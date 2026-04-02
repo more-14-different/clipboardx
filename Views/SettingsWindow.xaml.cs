@@ -20,6 +20,9 @@ public partial class SettingsWindow : Window
     private bool _pendingHideOnClick;
     private bool _pendingRunAtStartup;
     private bool _pendingEnableShellNavigateInject;
+    private string _pendingFileJumpFollowMode = FileJumpPickerFollowModes.Dialog;
+    private bool _pendingFileJumpAutoPopup = true;
+    private bool _pendingFileJumpOpenWhenDialogForeground = true;
     private bool _pendingFileJumpAutoOnFirstClick;
     private string _pendingModifierKey;
 
@@ -62,6 +65,15 @@ public partial class SettingsWindow : Window
 
         _pendingEnableShellNavigateInject = settings.EnableShellNavigateInject;
         ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
+
+        _pendingFileJumpFollowMode = FileJumpPickerFollowModes.Normalize(settings.FileJumpPickerFollowMode);
+        FileJumpFollowText.Text = FileJumpPickerFollowModes.IsDialog(_pendingFileJumpFollowMode) ? "跟随对话框" : "跟随鼠标";
+
+        _pendingFileJumpAutoPopup = settings.FileJumpPickerAutoPopup;
+        FileJumpAutoPopupText.Text = _pendingFileJumpAutoPopup ? "开启" : "关闭";
+
+        _pendingFileJumpOpenWhenDialogForeground = settings.FileJumpPickerOpenWhenDialogForeground;
+        FileJumpOpenOnForegroundText.Text = _pendingFileJumpOpenWhenDialogForeground ? "开启" : "关闭";
 
         _pendingFileJumpAutoOnFirstClick = settings.FileJumpAutoOnFirstClick;
         FileJumpAutoClickText.Text = _pendingFileJumpAutoOnFirstClick ? "开启" : "关闭";
@@ -305,6 +317,18 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void FolderJumpHelp_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is not FrameworkElement origin || origin.Tag is not string tag || string.IsNullOrEmpty(tag))
+            return;
+        var titleKey = $"FolderJumpHelp_{tag}_Title";
+        var bodyKey = $"FolderJumpHelp_{tag}_Body";
+        var title = origin.TryFindResource(titleKey) as string ?? "说明";
+        var body = origin.TryFindResource(bodyKey) as string ?? "";
+        System.Windows.MessageBox.Show(this, body, title, MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private void ThemeCycle_Click(object sender, RoutedEventArgs e)
     {
         _pendingTheme = _pendingTheme switch
@@ -339,6 +363,26 @@ public partial class SettingsWindow : Window
     {
         _pendingEnableShellNavigateInject = !_pendingEnableShellNavigateInject;
         ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
+    }
+
+    private void FileJumpFollowCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingFileJumpFollowMode = FileJumpPickerFollowModes.IsDialog(_pendingFileJumpFollowMode)
+            ? FileJumpPickerFollowModes.Mouse
+            : FileJumpPickerFollowModes.Dialog;
+        FileJumpFollowText.Text = FileJumpPickerFollowModes.IsDialog(_pendingFileJumpFollowMode) ? "跟随对话框" : "跟随鼠标";
+    }
+
+    private void FileJumpAutoPopupCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingFileJumpAutoPopup = !_pendingFileJumpAutoPopup;
+        FileJumpAutoPopupText.Text = _pendingFileJumpAutoPopup ? "开启" : "关闭";
+    }
+
+    private void FileJumpOpenOnForegroundCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingFileJumpOpenWhenDialogForeground = !_pendingFileJumpOpenWhenDialogForeground;
+        FileJumpOpenOnForegroundText.Text = _pendingFileJumpOpenWhenDialogForeground ? "开启" : "关闭";
     }
 
     private void FileJumpAutoClickCycle_Click(object sender, RoutedEventArgs e)
@@ -420,6 +464,9 @@ public partial class SettingsWindow : Window
         _settings.HideOnSameAppClick = _pendingHideOnClick;
         _settings.RunAtStartup = _pendingRunAtStartup;
         _settings.EnableShellNavigateInject = _pendingEnableShellNavigateInject;
+        _settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(_pendingFileJumpFollowMode);
+        _settings.FileJumpPickerAutoPopup = _pendingFileJumpAutoPopup;
+        _settings.FileJumpPickerOpenWhenDialogForeground = _pendingFileJumpOpenWhenDialogForeground;
         _settings.FileJumpAutoOnFirstClick = _pendingFileJumpAutoOnFirstClick;
         _settings.PreviewMaxLines = previewLines;
         _settings.PanelModifierKey = _pendingModifierKey;

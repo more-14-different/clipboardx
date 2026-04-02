@@ -97,6 +97,7 @@ public partial class PopupWindow : Window
     private bool _fileJumpPickerOpenInProgress;
     private int _fileJumpPickerSession;
     private DispatcherTimer? _fileJumpOpenDelayTimer;
+    private DispatcherTimer? _fileJumpAutoOpenDebounceTimer;
     private int _fileJumpDelaySession;
     private uint _fileJumpHotkeyModifiers;
     private uint _fileJumpHotkeyKey;
@@ -109,6 +110,9 @@ public partial class PopupWindow : Window
 
     /// <summary>已对其实施过「点击后自动跳转」的对话框顶层 HWND；同一窗口存续期间仅跳转一次，避免失焦再切回后重复跳转。</summary>
     private IntPtr _fileJumpAutoFirstJumpDoneRoot;
+
+    /// <summary>已因「对话框成为前台」自动弹出过跳转列表的顶层 HWND；关掉对话框再开才会再次自动弹。</summary>
+    private IntPtr _fileJumpAutoOpenPickerDoneRoot;
 
     public event Action? SettingsRequested;
 
@@ -176,6 +180,8 @@ public partial class PopupWindow : Window
     {
         DisarmFileJumpClickToNavigate();
         _fileJumpAutoFirstJumpDoneRoot = IntPtr.Zero;
+        _fileJumpAutoOpenDebounceTimer?.Stop();
+        _fileJumpAutoOpenDebounceTimer = null;
         UninstallKeyboardHook();
         UninstallMouseHook();
         UninstallForegroundWatcher();
@@ -1013,7 +1019,10 @@ public partial class PopupWindow : Window
         Dispatcher.BeginInvoke(() => TryRememberFolderFromDialog(prev));
 
         if (FileDialogJumpHelper.IsLikelyFileDialog(hwnd))
+        {
             ScheduleSnapshotFolderFromDialog(hwnd);
+            Dispatcher.BeginInvoke(() => TryAutoOpenFileJumpPickerWhenDialogForeground(hwnd));
+        }
 
         Dispatcher.BeginInvoke(() => UpdateFileJumpClickToNavigateArm(hwnd));
 
@@ -1138,19 +1147,129 @@ public partial class PopupWindow : Window
             return;
         }
 
-        _fileJumpLastHotkeyTick = tick;
-        _fileJumpLastDialogHwnd = dialogHwnd;
+        if (!_appSettings.FileJumpPickerAutoPopup)
+        {
+            ClearFileJumpDoubleTapState();
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path, allowShellInject);
+            return;
+        }
+
+        ScheduleFileJumpPickerOpen(dialogHwnd, candidates.ToList(), prefer, armHotkeyDoubleTap: true, allowShellInject,
+            autoForegroundStickyMode: false);
+    }
+
+    /// <summary>
+    /// 检测到打开/保存对话框成为前台时，延时后再尝试自动弹出（等对话框内路径可读）。
+    /// </summary>
+    private void TryAutoOpenFileJumpPickerWhenDialogForeground(IntPtr foregroundHwnd)
+    {
+        if (_appSettings == null || !_appSettings.FileJumpPickerOpenWhenDialogForeground) return;
+        if (foregroundHwnd == IntPtr.Zero) return;
+
+        _fileJumpAutoOpenDebounceTimer?.Stop();
+        _fileJumpAutoOpenDebounceTimer = null;
+        var hwndCapture = foregroundHwnd;
+        _fileJumpAutoOpenDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(420) };
+        _fileJumpAutoOpenDebounceTimer.Tick += (_, _) =>
+        {
+            _fileJumpAutoOpenDebounceTimer?.Stop();
+            _fileJumpAutoOpenDebounceTimer = null;
+            try
+            {
+                TryAutoOpenFileJumpPickerWhenDialogForegroundAfterDebounce(hwndCapture);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "TryAutoOpenFileJumpPickerWhenDialogForegroundAfterDebounce: " + ex);
+            }
+        };
+        _fileJumpAutoOpenDebounceTimer.Start();
+    }
+
+    /// <summary>
+    /// 对话框成为前台并经过短延时后：自动弹出跳转列表（多候选）或直跳单一路径。
+    /// </summary>
+    private void TryAutoOpenFileJumpPickerWhenDialogForegroundAfterDebounce(IntPtr foregroundHwnd)
+    {
+        if (_appSettings == null || !_appSettings.FileJumpPickerOpenWhenDialogForeground) return;
+        if (foregroundHwnd == IntPtr.Zero) return;
+        if (_fileJumpPickerOpenInProgress && _activeFileJumpPicker == null) return;
+        if (_activeFileJumpPicker != null) return;
+
+        if (_fileJumpAutoOpenPickerDoneRoot != IntPtr.Zero
+            && !Win32.IsWindow(_fileJumpAutoOpenPickerDoneRoot))
+            _fileJumpAutoOpenPickerDoneRoot = IntPtr.Zero;
+
+        var fgNow = Win32.GetForegroundWindow();
+        var dialogHwnd = ResolveFileJumpTargetHwndInternal(fgNow);
+        if (dialogHwnd == IntPtr.Zero) return;
+
+        var dialogRoot = Win32.GetAncestor(dialogHwnd, Win32.GA_ROOT);
+        if (dialogRoot == IntPtr.Zero) return;
+
+        var fgRoot = Win32.GetAncestor(fgNow, Win32.GA_ROOT);
+        if (fgRoot != dialogRoot)
+            return;
+
+        if (dialogRoot == _fileJumpAutoOpenPickerDoneRoot)
+            return;
+
+        var mem = _appSettings.LastFileDialogFolder?.Trim();
+        var allowShellInject = _appSettings.EnableShellNavigateInject;
+        var candidates = FileManagerPathCollector.CollectCandidates(dialogHwnd, mem);
+        if (candidates.Count == 0)
+            return;
+
+        if (candidates.Count == 1)
+        {
+            _fileJumpAutoOpenPickerDoneRoot = dialogRoot;
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[0].Path, allowShellInject);
+            return;
+        }
+
+        var prefer = PreferCandidateIndex(dialogHwnd, candidates);
+        _fileJumpAutoOpenPickerDoneRoot = dialogRoot;
+        if (!_appSettings.FileJumpPickerAutoPopup)
+        {
+            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path, allowShellInject);
+            return;
+        }
+
+        ScheduleFileJumpPickerOpen(dialogHwnd, candidates.ToList(), prefer, armHotkeyDoubleTap: false, allowShellInject,
+            autoForegroundStickyMode: true);
+    }
+
+    /// <summary>延时后打开跳转列表；与快捷键共用。</summary>
+    /// <param name="armHotkeyDoubleTap">true 时参与「短时间内第二次快捷键直跳」探测。</param>
+    /// <param name="autoForegroundStickyMode">true 时为自动前台模式：贴靠、不抢外部点击关窗、单击只导航。</param>
+    private void ScheduleFileJumpPickerOpen(
+        IntPtr dialogForPicker,
+        List<FileJumpCandidate> capturedCandidates,
+        int preferIdx,
+        bool armHotkeyDoubleTap,
+        bool allowShellInject,
+        bool autoForegroundStickyMode)
+    {
+        if (_appSettings == null) return;
+
+        var tick = Environment.TickCount64;
+        if (armHotkeyDoubleTap)
+        {
+            _fileJumpLastHotkeyTick = tick;
+            _fileJumpLastDialogHwnd = dialogForPicker;
+        }
+        else
+        {
+            _fileJumpLastDialogHwnd = dialogForPicker;
+        }
+
         var session = unchecked(++_fileJumpPickerSession);
         Win32.GetCursorPos(out var jumpMouseScreen);
+        var jumpX = jumpMouseScreen.X;
+        var jumpY = jumpMouseScreen.Y;
 
         CancelFileJumpPickerDelay();
         var delaySession = _fileJumpDelaySession;
-
-        var capturedCandidates = candidates.ToList();
-        var preferIdx = prefer;
-        var jumpX = jumpMouseScreen.X;
-        var jumpY = jumpMouseScreen.Y;
-        var dialogForPicker = dialogHwnd;
 
         var delayMs = Math.Clamp(_appSettings.FileJumpPickerShowDelayMs, 0, 10000);
 
@@ -1158,15 +1277,28 @@ public partial class PopupWindow : Window
         {
             Dispatcher.BeginInvoke(() =>
             {
-                if (session != _fileJumpPickerSession) return;
-                if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress)
+                // 若未真正打开列表窗，必须撤销双按窗口期，否则 _fileJumpLastHotkeyTick 仍有效，
+                // 短时间内再按会误走「二次快捷键直跳」，表现为列表从不弹出。
+                if (session != _fileJumpPickerSession)
+                {
+                    _fileJumpLastHotkeyTick = 0;
                     return;
+                }
+
+                if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress)
+                {
+                    _fileJumpLastHotkeyTick = 0;
+                    return;
+                }
+
+                _fileJumpLastHotkeyTick = 0;
                 _fileJumpPickerOpenInProgress = true;
                 FileDialogJumpPickerWindow? picker = null;
                 try
                 {
                     picker = new FileDialogJumpPickerWindow(
-                        capturedCandidates, preferIdx, jumpX, jumpY, _appSettings!, dialogForPicker);
+                        capturedCandidates, preferIdx, jumpX, jumpY, _appSettings!, dialogForPicker,
+                        autoForegroundStickyMode);
                     _activeFileJumpPicker = picker;
                     picker.Closed += (_, _) =>
                     {
@@ -1174,7 +1306,8 @@ public partial class PopupWindow : Window
                             _activeFileJumpPicker = null;
                         ClearFileJumpDoubleTapState();
                     };
-                    if (picker.ShowDialog() == true && !string.IsNullOrEmpty(picker.SelectedPath))
+                    var accepted = picker.ShowDialog() == true;
+                    if (!autoForegroundStickyMode && accepted && !string.IsNullOrEmpty(picker.SelectedPath))
                         FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath, allowShellInject);
                 }
                 finally

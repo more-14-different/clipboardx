@@ -20,7 +20,19 @@ public class AppSettings
     public uint FileJumpHotkeyKey { get; set; } = Win32.VK_G;
 
     /// <summary>多候选时跳转列表弹出前的延时（毫秒）；0 表示立即弹出。</summary>
-    public int FileJumpPickerShowDelayMs { get; set; } = 500;
+    public int FileJumpPickerShowDelayMs { get; set; } = 100;
+
+    /// <summary>Mouse：跳转列表跟随鼠标附近；Dialog：紧贴文件对话框并随窗口移动。</summary>
+    public string FileJumpPickerFollowMode { get; set; } = FileJumpPickerFollowModes.Dialog;
+
+    /// <summary>多候选时是否弹出跳转列表（关则直跳最优路径）；快捷键与 FileJumpPickerOpenWhenDialogForeground 共用。</summary>
+    public bool FileJumpPickerAutoPopup { get; set; } = true;
+
+    /// <summary>
+    /// 检测到文件对话框到前台时是否自动执行跳转逻辑（无需快捷键）；具体弹列表还是直跳由 FileJumpPickerAutoPopup 决定。
+    /// 开启时跳转列表 UI 始终贴靠文件对话框（与 FileJumpPickerFollowMode 的「跟随鼠标」无关）；快捷键打开的列表仍遵跟随模式。
+    /// </summary>
+    public bool FileJumpPickerOpenWhenDialogForeground { get; set; } = true;
 
     /// <summary>
     /// 系统公共文件对话框内跳转时，是否尝试将 Shell 导航 DLL 注入宿主进程（IShellBrowser::BrowseObject）。
@@ -104,6 +116,19 @@ public class AppSettings
                         settings.EnableShellNavigateInject = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoOnFirstClick), out _))
                         settings.FileJumpAutoOnFirstClick = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerFollowMode), out _))
+                    {
+                        if (doc.RootElement.TryGetProperty("FileJumpPickerDockBesideDialog", out var dockEl)
+                            && dockEl.ValueKind == JsonValueKind.False)
+                            settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Mouse;
+                        else
+                            settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Dialog;
+                    }
+                    settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(settings.FileJumpPickerFollowMode);
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerAutoPopup), out _))
+                        settings.FileJumpPickerAutoPopup = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerOpenWhenDialogForeground), out _))
+                        settings.FileJumpPickerOpenWhenDialogForeground = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     return settings;
@@ -122,6 +147,19 @@ public class AppSettings
                         settings.EnableShellNavigateInject = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoOnFirstClick), out _))
                         settings.FileJumpAutoOnFirstClick = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerFollowMode), out _))
+                    {
+                        if (doc.RootElement.TryGetProperty("FileJumpPickerDockBesideDialog", out var dockEl)
+                            && dockEl.ValueKind == JsonValueKind.False)
+                            settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Mouse;
+                        else
+                            settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Dialog;
+                    }
+                    settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(settings.FileJumpPickerFollowMode);
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerAutoPopup), out _))
+                        settings.FileJumpPickerAutoPopup = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerOpenWhenDialogForeground), out _))
+                        settings.FileJumpPickerOpenWhenDialogForeground = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.Save();
@@ -152,6 +190,9 @@ public class AppSettings
         FileJumpHotkeyModifiers = FileJumpHotkeyModifiers,
         FileJumpHotkeyKey = FileJumpHotkeyKey,
         FileJumpPickerShowDelayMs = FileJumpPickerShowDelayMs,
+        FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(FileJumpPickerFollowMode),
+        FileJumpPickerAutoPopup = FileJumpPickerAutoPopup,
+        FileJumpPickerOpenWhenDialogForeground = FileJumpPickerOpenWhenDialogForeground,
         EnableShellNavigateInject = EnableShellNavigateInject,
         FileJumpAutoOnFirstClick = FileJumpAutoOnFirstClick,
         Theme = Theme,

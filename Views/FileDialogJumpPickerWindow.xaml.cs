@@ -32,6 +32,9 @@ public partial class FileDialogJumpPickerWindow : Window
     private readonly int _mouseScreenX;
     private readonly int _mouseScreenY;
     private readonly AppSettings _settings;
+    private readonly bool _dockBesideDialog;
+    /// <summary>由「对话框成为前台」自动打开：贴靠、不因点文件窗/失焦而关、单击条目只导航不关闭。</summary>
+    private readonly bool _autoForegroundStickyMode;
     private readonly List<FileJumpCandidate> _collectorSnapshot;
 
     private IntPtr _jumpKeyboardHook;
@@ -48,6 +51,8 @@ public partial class FileDialogJumpPickerWindow : Window
     private bool _suppressDismissForSubDialog;
 
     private IntPtr _jumpPickerWinEventHook;
+
+    private DispatcherTimer? _dockFollowTimer;
 
     private int _pendingPhysX;
     private int _pendingPhysY;
@@ -67,19 +72,26 @@ public partial class FileDialogJumpPickerWindow : Window
         int mouseScreenX,
         int mouseScreenY,
         AppSettings settings,
-        IntPtr fileDialogOwnerHwnd)
+        IntPtr fileDialogOwnerHwnd,
+        bool autoForegroundStickyMode = false)
     {
         _fileDialogOwnerHwnd = fileDialogOwnerHwnd;
         _mouseScreenX = mouseScreenX;
         _mouseScreenY = mouseScreenY;
         _settings = settings;
+        _autoForegroundStickyMode = autoForegroundStickyMode;
+        // 由「对话框到前台自动执行」打开时始终贴靠文件窗；快捷键打开的遵「跟随对话框/鼠标」
+        _dockBesideDialog = fileDialogOwnerHwnd != IntPtr.Zero
+                            && (autoForegroundStickyMode
+                                || FileJumpPickerFollowModes.IsDialog(settings.FileJumpPickerFollowMode));
         _collectorSnapshot = collectorItems.ToList();
 
         InitializeComponent();
         Opacity = 0;
         ItemsList.ItemsSource = _displayRows;
-        FileJumpHintText.Text =
-            $"右键可收藏/移除；再按 {_settings.FileJumpHotkeyDisplayName} 同主面板逻辑。";
+        FileJumpHintText.Text = autoForegroundStickyMode
+            ? $"列表紧贴文件对话框并随窗口移动。单击切换目录；右键收藏/移除；Esc 关闭。快捷键 {_settings.FileJumpHotkeyDisplayName} 与平常相同。"
+            : $"右键可收藏/移除；再按 {_settings.FileJumpHotkeyDisplayName} 同主面板逻辑。";
 
         string? preferPath = null;
         if (preferSelectedIndex >= 0 && preferSelectedIndex < _collectorSnapshot.Count)
@@ -109,6 +121,8 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void FileDialogJumpPickerWindow_Closed(object? sender, EventArgs e)
     {
+        _dockFollowTimer?.Stop();
+        _dockFollowTimer = null;
         UninstallKeyboardHook();
         UninstallJumpPickerOutsideHooks();
         if (_hwnd != IntPtr.Zero)
@@ -123,6 +137,7 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void FileDialogJumpPickerWindow_Activated(object? sender, EventArgs e)
     {
+        if (_autoForegroundStickyMode) return;
         if (IsLoaded)
             Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
     }
@@ -369,7 +384,7 @@ public partial class FileDialogJumpPickerWindow : Window
                 return true;
             case Win32.VK_RETURN:
                 if (ItemsList.SelectedItem is FileJumpPickerRow r)
-                    CommitAndClose(r.Path);
+                    CommitSelection(r.Path);
                 return true;
             case Win32.VK_ESCAPE:
                 if (_searchText.Length > 0)
@@ -626,12 +641,43 @@ public partial class FileDialogJumpPickerWindow : Window
         }
 
         Opacity = 1.0;
-        InstallJumpPickerOutsideHooks();
+        if (!_autoForegroundStickyMode)
+            InstallJumpPickerOutsideHooks();
+        if (_dockBesideDialog)
+        {
+            _dockFollowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            _dockFollowTimer.Tick += (_, _) => DockFollowTick();
+            _dockFollowTimer.Start();
+        }
         Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
+    }
+
+    private void DockFollowTick()
+    {
+        if (!_dockBesideDialog || _hwnd == IntPtr.Zero) return;
+        if (!Win32.IsWindow(_fileDialogOwnerHwnd))
+        {
+            Close();
+            return;
+        }
+        try
+        {
+            UpdateLayout();
+            ComputePhysicalPosition(useActualSize: true);
+            ApplyPendingPhysicalSetWindowPos();
+            ApplyPendingPhysicalAsWpfLeftTop();
+        }
+        catch { /* ignore */ }
     }
 
     private void ComputePhysicalPosition(bool useActualSize)
     {
+        if (_dockBesideDialog
+            && _fileDialogOwnerHwnd != IntPtr.Zero
+            && Win32.IsWindow(_fileDialogOwnerHwnd)
+            && TryApplyDockedPhysical(useActualSize))
+            return;
+
         const int marginX = 14;
         const int marginY = 10;
 
@@ -667,6 +713,38 @@ public partial class FileDialogJumpPickerWindow : Window
         _pendingPhysY = y;
     }
 
+    /// <summary>按文件对话框计算紧贴物理坐标；失败则返回 false，由调用方回退到鼠标定位。</summary>
+    private bool TryApplyDockedPhysical(bool useActualSize)
+    {
+        Win32.POINT dpiPt = new() { X = _mouseScreenX, Y = _mouseScreenY };
+        if (Win32.GetWindowRect(_fileDialogOwnerHwnd, out var drDlg))
+        {
+            dpiPt.X = (drDlg.Left + drDlg.Right) / 2;
+            dpiPt.Y = (drDlg.Top + drDlg.Bottom) / 2;
+        }
+        var hMon = Win32.MonitorFromPoint(dpiPt, Win32.MONITOR_DEFAULTTONEAREST);
+        Win32.GetDpiForMonitor(hMon, 0, out uint monDpiX, out uint monDpiY);
+        double scaleX = monDpiX / 96.0;
+        double scaleY = monDpiY / 96.0;
+
+        double wpfW = useActualSize && ActualWidth > 1 ? ActualWidth : Width;
+        double wpfH;
+        if (useActualSize && ActualHeight > 1)
+            wpfH = ActualHeight;
+        else
+            wpfH = MaxHeight > 1 && MaxHeight < 900 ? MaxHeight : 400;
+
+        int popupW = (int)Math.Ceiling(wpfW * scaleX);
+        int popupH = (int)Math.Ceiling(wpfH * scaleY);
+
+        if (!FileJumpPickerDockPlacement.TryComputePosition(_fileDialogOwnerHwnd, popupW, popupH, out var px, out var py))
+            return false;
+
+        _pendingPhysX = px;
+        _pendingPhysY = py;
+        return true;
+    }
+
     private void ApplyPendingPhysicalAsWpfLeftTop()
     {
         try
@@ -693,7 +771,7 @@ public partial class FileDialogJumpPickerWindow : Window
         if (el is ListBoxItem lbi && lbi.DataContext is FileJumpPickerRow row)
         {
             ItemsList.SelectedItem = row;
-            CommitAndClose(row.Path);
+            CommitSelection(row.Path);
         }
     }
 
@@ -835,7 +913,7 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         var row = _displayRows.FirstOrDefault(r => r.DisplayIndex == index1To9);
         if (row != null)
-            CommitAndClose(row.Path);
+            CommitSelection(row.Path);
     }
 
     private void MoveSelection(int delta)
@@ -900,10 +978,78 @@ public partial class FileDialogJumpPickerWindow : Window
         AssignVisibleQuickIndices(newFirstVisible);
     }
 
+    private void CommitSelection(string path)
+    {
+        if (_autoForegroundStickyMode)
+            CommitNavigateKeepOpen(path);
+        else
+            CommitAndClose(path);
+    }
+
     private void CommitAndClose(string path)
     {
         SelectedPath = path;
         DialogResult = true;
         Close();
+    }
+
+    /// <summary>粘性自动模式：只切换文件对话框目录并刷新列表，不关闭窗口。</summary>
+    private void CommitNavigateKeepOpen(string path)
+    {
+        if (!FileDialogJumpHelper.TryNavigateToFolder(_fileDialogOwnerHwnd, path,
+                _settings.EnableShellNavigateInject))
+            return;
+
+        try
+        {
+            if (FileDialogJumpHelper.TryReadCurrentFolder(_fileDialogOwnerHwnd, out var folder)
+                && !string.IsNullOrEmpty(folder))
+            {
+                _settings.LastFileDialogFolder = folder;
+                _settings.Save();
+            }
+        }
+        catch { /* ignore */ }
+
+        var mem = _settings.LastFileDialogFolder?.Trim();
+        List<FileJumpCandidate> fresh;
+        try
+        {
+            fresh = FileManagerPathCollector.CollectCandidates(_fileDialogOwnerHwnd, mem);
+        }
+        catch
+        {
+            return;
+        }
+
+        _collectorSnapshot.Clear();
+        _collectorSnapshot.AddRange(fresh);
+
+        BuildMasterList();
+        RefreshFilter();
+        var i = _displayRows.ToList().FindIndex(r =>
+            string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (i >= 0)
+        {
+            ItemsList.SelectedIndex = i;
+            ItemsList.ScrollIntoView(ItemsList.SelectedItem);
+        }
+        else if (_displayRows.Count > 0)
+        {
+            ItemsList.SelectedIndex = 0;
+            ItemsList.ScrollIntoView(ItemsList.SelectedItem);
+        }
+
+        if (_dockBesideDialog && _hwnd != IntPtr.Zero)
+        {
+            try
+            {
+                UpdateLayout();
+                ComputePhysicalPosition(useActualSize: true);
+                ApplyPendingPhysicalSetWindowPos();
+                ApplyPendingPhysicalAsWpfLeftTop();
+            }
+            catch { /* ignore */ }
+        }
     }
 }

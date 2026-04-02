@@ -11,4 +11,6 @@ build/
 publish/
 publish-self-contained/
 
+ClipboardX/
+
 # Package manager
