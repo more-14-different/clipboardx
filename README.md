@@ -22,7 +22,7 @@
    - **`ClipboardX-*-win-x64-no-runtime.zip`** — 体积小，需已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
    - **`ClipboardX-*-win-x64-self-contained.zip`** — 自带运行时，无需单独装 .NET
 2. 解压后运行 **`ClipboardX.exe`**。从临时目录启动时，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并可在「应用和功能」中卸载；托盘 **关于** 可查看版本与主页。
-3. **检查更新**：托盘右键 → **检查更新…**，对比 GitHub Releases；若有新版，会按当前是否使用共享运行时选择 **no-runtime** 或 **self-contained** 包，关闭程序后覆盖并重启。需可访问 GitHub（含 `api.github.com`）。
+3. **检查更新**：托盘右键 → **检查更新…**，对比 GitHub Releases；若有新版，会按当前是否使用共享运行时选择 **no-runtime** 或 **self-contained** 包，关闭程序后覆盖并重启。需可访问 GitHub（含 `api.github.com`）。**设置 → 剪贴板 → 启动时检查更新**（默认开）会在启动约 45 秒后静默查询；若有新版仅**托盘气泡**提示，同一发行版只提示一次，仍须手动「检查更新…」下载安装。
 
 ### SmartScreen「Windows 已保护你的电脑」
 
@@ -53,7 +53,7 @@
 
 | 选项卡 | 内容 |
 |--------|------|
-| **常规** | 最大记录数；**呼出快捷键**；**文件对话框跳转键**；跳转列表弹出**延时**（0～10000 ms，0 为立即；延时内再按一次跳转键会直接跳当前预选项）；**Shell 注入跳转**开关；**点击后自动跳转**；外观**主题**、**弹出位置**（光标旁 / 鼠标旁）、**透明度**；**预览行数**；**面板主键**；**开机自启动**；**点击外部隐藏**剪贴板面板；**清空所有历史**（快捷短语仍保留在 `settings.json`） |
+| **常规** | 最大记录数；**呼出快捷键**；**文件对话框跳转键**；跳转列表弹出**延时**（0～10000 ms，0 为立即；延时内再按一次跳转键会直接跳当前预选项）；**Shell 注入跳转**开关；**点击后自动跳转**；外观**主题**、**弹出位置**（光标旁 / 鼠标旁）、**透明度**；**预览行数**；**面板主键**；**开机自启动**；**启动时检查更新**（静默查询、托盘气泡提示）；**点击外部隐藏**剪贴板面板；**清空所有历史**（快捷短语仍保留在 `settings.json`） |
 | **自定义文件对话框** | 针对内置识别为「无」的窗口：规则列表、删除、**运行探测向导**、**导入（合并 / 替换）**、**导出**；底部显示规则文件路径 |
 
 首次关闭设置时若点 **保存**，上述常规项写入 **`settings.json`**；自定义规则在导入/删除/向导成功时已写入 **`custom_file_dialogs.json`**，与是否点「保存」无关。
@@ -161,7 +161,7 @@
 
 | 位置 | 说明 |
 |------|------|
-| `%AppData%\ClipboardX\settings.json` | 热键、主题、自启动、最大条数、快捷短语、**文件夹收藏**、Shell 注入开关等 |
+| `%AppData%\ClipboardX\settings.json` | 热键、主题、自启动、**启动时检查更新**、最大条数、快捷短语、**文件夹收藏**、Shell 注入开关等（含内部字段 `LastStartupUpdateNotifiedTag`，用于同一版本只气泡一次） |
 | `%AppData%\ClipboardX\custom_file_dialogs.json` | **自定义文件对话框**规则（与设置中导入/导出格式一致） |
 | `%LocalAppData%\ClipboardX\clipboard_history.db` | SQLite：**剪贴板历史**正文（WAL 模式） |
 | `%LocalAppData%\ClipboardX\shell_navigate.log` | **Shell 注入**与相关跳转诊断（UTF-8） |

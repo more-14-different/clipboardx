@@ -52,6 +52,12 @@ public class AppSettings
     public bool HideOnSameAppClick { get; set; } = true;
     /// <summary>登录 Windows 时自动启动本程序（默认开启）。</summary>
     public bool RunAtStartup { get; set; } = true;
+
+    /// <summary>启动后静默访问 GitHub Releases，若有新版本则在托盘气泡提示（不弹阻断窗）。</summary>
+    public bool CheckUpdatesOnStartup { get; set; } = true;
+
+    /// <summary>启动检测已提示过的发行 tag（如 v1.2.0），避免同一版本重复气泡；升级或已最新时会清空。</summary>
+    public string? LastStartupUpdateNotifiedTag { get; set; }
     public int PreviewMaxLines { get; set; } = 2;
     public string PanelModifierKey { get; set; } = "Ctrl";
     public List<QuickPasteEntry> QuickPastes { get; set; } = new();
@@ -129,6 +135,8 @@ public class AppSettings
                         settings.FileJumpPickerAutoPopup = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerOpenWhenDialogForeground), out _))
                         settings.FileJumpPickerOpenWhenDialogForeground = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(CheckUpdatesOnStartup), out _))
+                        settings.CheckUpdatesOnStartup = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     return settings;
@@ -160,6 +168,8 @@ public class AppSettings
                         settings.FileJumpPickerAutoPopup = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerOpenWhenDialogForeground), out _))
                         settings.FileJumpPickerOpenWhenDialogForeground = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(CheckUpdatesOnStartup), out _))
+                        settings.CheckUpdatesOnStartup = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.Save();
@@ -200,6 +210,8 @@ public class AppSettings
         PopupOpacity = PopupOpacity,
         HideOnSameAppClick = HideOnSameAppClick,
         RunAtStartup = RunAtStartup,
+        CheckUpdatesOnStartup = CheckUpdatesOnStartup,
+        LastStartupUpdateNotifiedTag = LastStartupUpdateNotifiedTag,
         PreviewMaxLines = PreviewMaxLines,
         PanelModifierKey = PanelModifierKey,
         QuickPastes = QuickPastes.Select(q => new QuickPasteEntry { Phrase = q.Phrase, Content = q.Content }).ToList(),

@@ -123,6 +123,61 @@ public partial class App : Application
         _popup.SettingsRequested += OpenSettings;
 
         SetupTrayIcon();
+        _ = CheckForUpdatesOnStartupAsync();
+    }
+
+    /// <summary>
+    /// 启动约 45 秒后静默请求 GitHub；有新版本时仅托盘气泡提示，同一发行版只提示一次。
+    /// </summary>
+    private async Task CheckForUpdatesOnStartupAsync()
+    {
+        if (!_settings.CheckUpdatesOnStartup) return;
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(45)).ConfigureAwait(false);
+        }
+        catch { /* Task.Delay 取消等 */ }
+
+        if (_trayIcon == null) return;
+
+        GitHubUpdateService.LatestReleaseInfo info;
+        try
+        {
+            info = await GitHubUpdateService.FetchLatestReleaseAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            return;
+        }
+
+        var current = AppInfo.DisplayVersion;
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (_trayIcon == null) return;
+
+            if (!GitHubUpdateService.IsRemoteNewerThanCurrent(info.TagName, current))
+            {
+                if (!string.IsNullOrEmpty(_settings.LastStartupUpdateNotifiedTag))
+                {
+                    _settings.LastStartupUpdateNotifiedTag = null;
+                    _settings.Save();
+                }
+                return;
+            }
+
+            var tagNorm = info.TagName.Trim();
+            if (string.Equals(tagNorm, _settings.LastStartupUpdateNotifiedTag, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _settings.LastStartupUpdateNotifiedTag = tagNorm;
+            _settings.Save();
+            var ver = tagNorm.TrimStart('v', 'V');
+            _trayIcon.ShowBalloonTip(
+                12000,
+                "ClipboardX — 发现新版本",
+                $"版本 {ver} 已发布，托盘右键「检查更新…」可下载安装。（当前 {current}）",
+                WinForms.ToolTipIcon.Info);
+        });
     }
 
     private void SetupTrayIcon()
@@ -317,6 +372,7 @@ public partial class App : Application
             _settings.PopupOpacity = copy.PopupOpacity;
             _settings.HideOnSameAppClick = copy.HideOnSameAppClick;
             _settings.RunAtStartup = copy.RunAtStartup;
+            _settings.CheckUpdatesOnStartup = copy.CheckUpdatesOnStartup;
             _settings.EnableShellNavigateInject = copy.EnableShellNavigateInject;
             _settings.FileJumpAutoOnFirstClick = copy.FileJumpAutoOnFirstClick;
             _settings.PreviewMaxLines = copy.PreviewMaxLines;

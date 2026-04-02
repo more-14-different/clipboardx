@@ -19,6 +19,7 @@ public partial class SettingsWindow : Window
     private double _pendingOpacity;
     private bool _pendingHideOnClick;
     private bool _pendingRunAtStartup;
+    private bool _pendingCheckUpdatesOnStartup;
     private bool _pendingEnableShellNavigateInject;
     private string _pendingFileJumpFollowMode = FileJumpPickerFollowModes.Dialog;
     private bool _pendingFileJumpAutoPopup = true;
@@ -62,6 +63,9 @@ public partial class SettingsWindow : Window
 
         _pendingRunAtStartup = settings.RunAtStartup;
         StartupText.Text = _pendingRunAtStartup ? "开启" : "关闭";
+
+        _pendingCheckUpdatesOnStartup = settings.CheckUpdatesOnStartup;
+        CheckUpdateOnStartupText.Text = _pendingCheckUpdatesOnStartup ? "开启" : "关闭";
 
         _pendingEnableShellNavigateInject = settings.EnableShellNavigateInject;
         ShellInjectText.Text = _pendingEnableShellNavigateInject ? "开启" : "关闭";
@@ -347,6 +351,12 @@ public partial class SettingsWindow : Window
         StartupText.Text = _pendingRunAtStartup ? "开启" : "关闭";
     }
 
+    private void CheckUpdateOnStartupCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingCheckUpdatesOnStartup = !_pendingCheckUpdatesOnStartup;
+        CheckUpdateOnStartupText.Text = _pendingCheckUpdatesOnStartup ? "开启" : "关闭";
+    }
+
     private void ShellInjectCycle_Click(object sender, RoutedEventArgs e)
     {
         _pendingEnableShellNavigateInject = !_pendingEnableShellNavigateInject;
@@ -451,6 +461,7 @@ public partial class SettingsWindow : Window
         _settings.PopupOpacity = _pendingOpacity;
         _settings.HideOnSameAppClick = _pendingHideOnClick;
         _settings.RunAtStartup = _pendingRunAtStartup;
+        _settings.CheckUpdatesOnStartup = _pendingCheckUpdatesOnStartup;
         _settings.EnableShellNavigateInject = _pendingEnableShellNavigateInject;
         _settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(_pendingFileJumpFollowMode);
         _settings.FileJumpPickerAutoPopup = _pendingFileJumpAutoPopup;
