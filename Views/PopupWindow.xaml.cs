@@ -151,8 +151,10 @@ public partial class PopupWindow : Window
         _fileJumpHotkeyModifiers = settings.FileJumpHotkeyModifiers;
         _fileJumpHotkeyKey = settings.FileJumpHotkeyKey;
 
+#if CLIPX_CLIPBOARD
         LoadHistoryFromStore();
         LoadQuickPastes();
+#endif
         UpdateFooterHints();
 
         Opacity = _popupOpacity;
@@ -168,13 +170,16 @@ public partial class PopupWindow : Window
         var source = HwndSource.FromHwnd(_hwnd);
         source?.AddHook(WndProc);
 
+#if CLIPX_CLIPBOARD
         if (!Win32.RegisterHotKey(_hwnd, HotkeyId, _hotkeyModifiers | Win32.MOD_NOREPEAT, _hotkeyKey))
         {
             System.Windows.MessageBox.Show(
                 $"热键 {settings.HotkeyDisplayName} 注册失败，可能被其他程序占用",
                 "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+#endif
 
+#if CLIPX_FILEJUMP
         if (!Win32.RegisterHotKey(_hwnd, HotkeyJumpLastFolderId,
                 _fileJumpHotkeyModifiers | Win32.MOD_NOREPEAT, _fileJumpHotkeyKey))
         {
@@ -182,24 +187,39 @@ public partial class PopupWindow : Window
                 $"快捷键 {settings.FileJumpHotkeyDisplayName}（文件对话框跳转）注册失败，可能与其他软件冲突",
                 "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+#endif
 
+#if CLIPX_CLIPBOARD
         Win32.AddClipboardFormatListener(_hwnd);
+#endif
+#if CLIPX_FILEJUMP
         InstallForegroundWatcher();
+#endif
         UpdateEmptyState();
     }
 
     public void Cleanup()
     {
+#if CLIPX_FILEJUMP
         DisarmFileJumpClickToNavigate();
         _fileJumpAutoFirstJumpDoneRoot = IntPtr.Zero;
         _fileJumpAutoOpenDebounceTimer?.Stop();
         _fileJumpAutoOpenDebounceTimer = null;
+#endif
         UninstallKeyboardHook();
         UninstallMouseHook();
+#if CLIPX_FILEJUMP
         UninstallForegroundWatcher();
+#endif
+#if CLIPX_CLIPBOARD
         Win32.UnregisterHotKey(_hwnd, HotkeyId);
+#endif
+#if CLIPX_FILEJUMP
         Win32.UnregisterHotKey(_hwnd, HotkeyJumpLastFolderId);
+#endif
+#if CLIPX_CLIPBOARD
         Win32.RemoveClipboardFormatListener(_hwnd);
+#endif
     }
 
     public bool UpdateHotkey(uint modifiers, uint key)

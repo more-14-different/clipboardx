@@ -39,6 +39,14 @@ public partial class SettingsWindow : Window
         _settings = settings;
         _originalTheme = settings.Theme;
 
+#if !CLIPX_CLIPBOARD
+        ClipboardTab.Visibility = Visibility.Collapsed;
+#endif
+#if !CLIPX_FILEJUMP
+        FileJumpTab.Visibility = Visibility.Collapsed;
+        CustomDialogTab.Visibility = Visibility.Collapsed;
+#endif
+
         MaxItemsBox.Text = settings.MaxItems.ToString();
         _pendingModifiers = settings.HotkeyModifiers;
         _pendingKey = settings.HotkeyKey;

@@ -192,8 +192,10 @@ public partial class App : Application
         };
 
         var menu = new WinForms.ContextMenuStrip();
+#if CLIPX_CLIPBOARD
         menu.Items.Add($"显示 ({_settings.HotkeyDisplayName})", null, (_, _) =>
             Dispatcher.Invoke(() => _popup?.TogglePopup()));
+#endif
         menu.Items.Add("设置", null, (_, _) =>
             Dispatcher.Invoke(OpenSettings));
         menu.Items.Add("关于", null, (_, _) =>
@@ -203,7 +205,9 @@ public partial class App : Application
 #if DEBUG
         menu.Items.Add("采集窗口信息", null, (_, _) => StartWindowInspection());
 #endif
+#if CLIPX_FILEJUMP
         menu.Items.Add("添加自定义文件对话框…", null, (_, _) => StartCustomFileDialogWizard());
+#endif
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("卸载…", null, (_, _) =>
             Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
@@ -211,8 +215,10 @@ public partial class App : Application
             Dispatcher.Invoke(Shutdown));
         _trayIcon.ContextMenuStrip = menu;
 
+#if CLIPX_CLIPBOARD
         _trayIcon.DoubleClick += (_, _) =>
             Dispatcher.Invoke(() => _popup?.TogglePopup());
+#endif
 
 #if DEBUG
         try

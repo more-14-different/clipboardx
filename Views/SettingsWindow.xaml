@@ -22,7 +22,7 @@
                     Margin="12,12,12,8"
                     Foreground="{DynamicResource PrimaryText}">
 
-            <TabItem Header="剪贴板">
+            <TabItem x:Name="ClipboardTab" Header="剪贴板">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,4,0,0">
                     <Grid Margin="16,10,16,8">
                         <Grid.RowDefinitions>
@@ -168,7 +168,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Header="文件夹跳转">
+            <TabItem x:Name="FileJumpTab" Header="文件夹跳转">
                 <TabItem.Resources>
                     <sys:String x:Key="FolderJumpHelp_Hotkey_Title">文件对话框跳转键</sys:String>
                     <sys:String x:Key="FolderJumpHelp_Hotkey_Body">点击右侧区域后，按下要绑定的组合键。须与「剪贴板」页里的呼出快捷键不同。</sys:String>
@@ -422,7 +422,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Header="自定义文件对话框">
+            <TabItem x:Name="CustomDialogTab" Header="自定义文件对话框">
                 <Grid Margin="16,12,16,12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
