@@ -78,10 +78,15 @@ public static class PerUserInstall
     /// <summary>在线更新时覆盖此目录（与 PerUserInstall 安装目录一致，或为当前便携运行目录）。</summary>
     public static string GetUpdateInstallDirectory()
     {
+        if (AppPaths.IsPortable)
+        {
+            var dir = Path.GetDirectoryName(Environment.ProcessPath);
+            return string.IsNullOrEmpty(dir) ? AppContext.BaseDirectory : NormalizePath(dir);
+        }
         if (IsRunningFromInstallLocation())
             return InstallDirectory;
-        var dir = Path.GetDirectoryName(Environment.ProcessPath);
-        return string.IsNullOrEmpty(dir) ? InstallDirectory : NormalizePath(dir);
+        var d = Path.GetDirectoryName(Environment.ProcessPath);
+        return string.IsNullOrEmpty(d) ? InstallDirectory : NormalizePath(d);
     }
 
     public static bool HasUninstallArgument(string[] args) =>
@@ -144,6 +149,15 @@ public static class PerUserInstall
 
         if (removeAppData)
         {
+            // 删除统一 DataRoot（安装模式为 %LocalAppData%\ClipboardX）
+            try
+            {
+                if (Directory.Exists(AppPaths.DataRoot))
+                    Directory.Delete(AppPaths.DataRoot, recursive: true);
+            }
+            catch { /* ignore */ }
+
+            // 清理可能残存的旧版 Roaming 目录
             foreach (var folder in new[] { "ClipboardX", "ClipboardManager" })
             {
                 try
@@ -196,6 +210,7 @@ public static class PerUserInstall
     /// </summary>
     public static void EnsureUninstallRegistrationIfNeeded()
     {
+        if (AppPaths.IsPortable) return;
         if (!IsRunningFromInstallLocation()) return;
         try
         {
@@ -301,6 +316,7 @@ public static class PerUserInstall
         _ = args.Count;
         return false;
 #else
+        if (AppPaths.IsPortable) return false;
         if (!ShouldUsePerUserInstallPipeline()) return false;
         if (IsRunningFromInstallLocation()) return false;
 
