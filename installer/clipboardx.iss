@@ -46,7 +46,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "runonstartup"; Description: "开机自动启动"; GroupDescription: "其他选项:"; Flags: checked
+; 开机自启：不设 Flags 时默认勾选（Inno 6 仅支持 unchecked 等，无 checked 标志）
+Name: "runonstartup"; Description: "开机自动启动"; GroupDescription: "其他选项:"
 
 [Files]
 Source: "{#PublishDir}\ClipboardX.exe"; DestDir: "{app}"; Flags: ignoreversion

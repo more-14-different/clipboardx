@@ -258,6 +258,10 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 完整历史见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，以下摘录主要变更。
 
+### v1.2.3
+
+- **安装包 / CI**：Inno `[Tasks]` 移除非法标志 `checked`（Inno 6 仅支持 `unchecked` 等；默认即为勾选），修复 ISCC 6.7.x 报 unknown flag 导致安装包步骤失败
+
 ### v1.2.2
 
 - **安装包 / CI**：Inno 简体中文语言文件改为与 `installer\clipboardx.iss` 同目录随仓库分发（`ChineseSimplified.isl`，来源 jrsoftware/issrc），避免 GitHub Actions 上自带 Inno 未附带 `Languages\ChineseSimplified.isl` 导致编译失败
