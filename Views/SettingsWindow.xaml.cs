@@ -25,6 +25,7 @@ public partial class SettingsWindow : Window
     private bool _pendingFileJumpAutoPopup = true;
     private bool _pendingFileJumpOpenWhenDialogForeground = true;
     private bool _pendingFileJumpAutoOnFirstClick;
+    private bool _pendingFileJumpAutoSyncOnReturn;
     private string _pendingModifierKey;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
@@ -81,6 +82,9 @@ public partial class SettingsWindow : Window
 
         _pendingFileJumpAutoOnFirstClick = settings.FileJumpAutoOnFirstClick;
         FileJumpAutoClickText.Text = _pendingFileJumpAutoOnFirstClick ? "开启" : "关闭";
+
+        _pendingFileJumpAutoSyncOnReturn = settings.FileJumpAutoSyncOnReturn;
+        FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
 
         PreviewLinesBox.Text = settings.PreviewMaxLines.ToString();
 
@@ -389,6 +393,12 @@ public partial class SettingsWindow : Window
         FileJumpAutoClickText.Text = _pendingFileJumpAutoOnFirstClick ? "开启" : "关闭";
     }
 
+    private void FileJumpAutoSyncCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingFileJumpAutoSyncOnReturn = !_pendingFileJumpAutoSyncOnReturn;
+        FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
+    }
+
     private static string ModifierDisplayName(string m) => m switch
     {
         "Alt" => "Alt",
@@ -467,6 +477,7 @@ public partial class SettingsWindow : Window
         _settings.FileJumpPickerAutoPopup = _pendingFileJumpAutoPopup;
         _settings.FileJumpPickerOpenWhenDialogForeground = _pendingFileJumpOpenWhenDialogForeground;
         _settings.FileJumpAutoOnFirstClick = _pendingFileJumpAutoOnFirstClick;
+        _settings.FileJumpAutoSyncOnReturn = _pendingFileJumpAutoSyncOnReturn;
         _settings.PreviewMaxLines = previewLines;
         _settings.PanelModifierKey = _pendingModifierKey;
 

@@ -35,6 +35,13 @@ public class AppSettings
     public bool FileJumpPickerOpenWhenDialogForeground { get; set; } = true;
 
     /// <summary>
+    /// 从资源管理器/TC 切回已打开的文件对话框时，若采集到的路径与对话框当前路径不同则自动跳转（实验性）。
+    /// 与 <see cref="FileJumpPickerOpenWhenDialogForeground"/> 的区别：后者只在「首次」到前台时触发一次，
+    /// 此选项在「每次」切回时重新采集并比较。
+    /// </summary>
+    public bool FileJumpAutoSyncOnReturn { get; set; } = false;
+
+    /// <summary>
     /// 系统公共文件对话框内跳转时，是否尝试将 Shell 导航 DLL 注入宿主进程（IShellBrowser::BrowseObject）。
     /// 关闭后仅走地址栏/键入模拟，兼容部分杀软或宿主拦截注入的环境；WPS 等自定义对话框始终不注入。
     /// </summary>
@@ -201,6 +208,7 @@ public class AppSettings
         FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(FileJumpPickerFollowMode),
         FileJumpPickerAutoPopup = FileJumpPickerAutoPopup,
         FileJumpPickerOpenWhenDialogForeground = FileJumpPickerOpenWhenDialogForeground,
+        FileJumpAutoSyncOnReturn = FileJumpAutoSyncOnReturn,
         EnableShellNavigateInject = EnableShellNavigateInject,
         FileJumpAutoOnFirstClick = FileJumpAutoOnFirstClick,
         Theme = Theme,

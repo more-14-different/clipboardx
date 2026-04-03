@@ -122,6 +122,10 @@ public partial class PopupWindow : Window
     /// <summary>已因「对话框成为前台」自动弹出过跳转列表的顶层 HWND；关掉对话框再开才会再次自动弹。</summary>
     private IntPtr _fileJumpAutoOpenPickerDoneRoot;
 
+    /// <summary>「切回对话框自动同步路径」采集代数，递增后过时结果丢弃。</summary>
+    private int _fileJumpAutoSyncCollectGen;
+    private DispatcherTimer? _fileJumpAutoSyncDebounceTimer;
+
     public event Action? SettingsRequested;
 
     public PopupWindow()
@@ -1158,6 +1162,7 @@ public partial class PopupWindow : Window
         {
             ScheduleSnapshotFolderFromDialog(hwnd);
             Dispatcher.BeginInvoke(() => TryAutoOpenFileJumpPickerWhenDialogForeground(hwnd));
+            Dispatcher.BeginInvoke(() => TryAutoSyncPathOnDialogReturn(hwnd));
         }
 
         Dispatcher.BeginInvoke(() => UpdateFileJumpClickToNavigateArm(hwnd));
@@ -1480,6 +1485,112 @@ public partial class PopupWindow : Window
         ScheduleFileJumpPickerOpen(dialogHwnd, candidates.ToList(), prefer, armHotkeyDoubleTap: false, allowShellInject,
             autoForegroundStickyMode: true);
     }
+
+    #region 切回对话框自动同步路径
+
+    /// <summary>
+    /// 对话框再次到前台时（已经过首次自动弹窗），重新采集路径，若首条候选与对话框当前路径不同则自动跳转。
+    /// </summary>
+    private void TryAutoSyncPathOnDialogReturn(IntPtr foregroundHwnd)
+    {
+        if (_appSettings == null || !_appSettings.FileJumpAutoSyncOnReturn) return;
+        if (foregroundHwnd == IntPtr.Zero) return;
+
+        // 仅在「已经首次处理过」的对话框上生效，避免与首次自动弹窗冲突
+        var dialogHwnd = ResolveFileJumpTargetHwndInternal(foregroundHwnd);
+        if (dialogHwnd == IntPtr.Zero) return;
+        var dialogRoot = Win32.GetAncestor(dialogHwnd, Win32.GA_ROOT);
+        if (dialogRoot == IntPtr.Zero) return;
+        if (dialogRoot != _fileJumpAutoOpenPickerDoneRoot) return;
+
+        _fileJumpAutoSyncDebounceTimer?.Stop();
+        _fileJumpAutoSyncDebounceTimer = null;
+
+        var hwndCapture = dialogHwnd;
+        var rootCapture = dialogRoot;
+        _fileJumpAutoSyncDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _fileJumpAutoSyncDebounceTimer.Tick += (_, _) =>
+        {
+            _fileJumpAutoSyncDebounceTimer?.Stop();
+            _fileJumpAutoSyncDebounceTimer = null;
+            try
+            {
+                TryAutoSyncPathOnDialogReturnCore(hwndCapture, rootCapture);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "TryAutoSyncPathOnDialogReturnCore: " + ex);
+            }
+        };
+        _fileJumpAutoSyncDebounceTimer.Start();
+    }
+
+    private void TryAutoSyncPathOnDialogReturnCore(IntPtr dialogHwnd, IntPtr dialogRoot)
+    {
+        if (_appSettings == null || !_appSettings.FileJumpAutoSyncOnReturn) return;
+        if (!Win32.IsWindow(dialogHwnd)) return;
+
+        // 正在打开跳转列表或导航中，不干扰
+        if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress) return;
+
+        var fgNow = Win32.GetForegroundWindow();
+        var fgRoot = Win32.GetAncestor(fgNow, Win32.GA_ROOT);
+        if (fgRoot != dialogRoot) return;
+
+        var allowShellInject = _appSettings.EnableShellNavigateInject;
+        var mem = _appSettings.LastFileDialogFolder?.Trim();
+
+        unchecked { _fileJumpAutoSyncCollectGen++; }
+        var gen = _fileJumpAutoSyncCollectGen;
+        var dialogCapture = dialogHwnd;
+
+        void StaCollect()
+        {
+            List<FileJumpCandidate> candidates;
+            try
+            {
+                candidates = FileManagerPathCollector.CollectCandidates(dialogCapture, mem);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "CollectCandidates (auto-sync): " + ex);
+                return;
+            }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (gen != _fileJumpAutoSyncCollectGen) return;
+                if (candidates.Count == 0) return;
+
+                var bestPath = candidates[0].Path;
+                if (string.IsNullOrEmpty(bestPath)) return;
+
+                // 比较对话框当前路径
+                if (FileDialogJumpHelper.TryReadCurrentFolder(dialogCapture, out var currentFolder)
+                    && !string.IsNullOrEmpty(currentFolder))
+                {
+                    var norm1 = currentFolder.TrimEnd('\\', '/');
+                    var norm2 = bestPath.TrimEnd('\\', '/');
+                    if (string.Equals(norm1, norm2, StringComparison.OrdinalIgnoreCase))
+                        return;
+                }
+
+                ShellNavigateLog.Write("filejump",
+                    $"auto-sync navigating from \"{currentFolder ?? "(unreadable)"}\" to \"{bestPath}\"");
+                FileDialogJumpHelper.TryNavigateToFolder(dialogCapture, bestPath, allowShellInject);
+            }, DispatcherPriority.Normal);
+        }
+
+        var th = new Thread(StaCollect)
+        {
+            IsBackground = true,
+            Name = "ClipboardX-FileJump-AutoSync-Collect",
+        };
+        th.SetApartmentState(ApartmentState.STA);
+        th.Start();
+    }
+
+    #endregion
 
     /// <summary>延时后打开跳转列表；与快捷键共用。</summary>
     /// <param name="armHotkeyDoubleTap">true 时参与「短时间内第二次快捷键直跳」探测。</param>
