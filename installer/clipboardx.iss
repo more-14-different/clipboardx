@@ -97,9 +97,10 @@ begin
 end;
 
 function IsDotNet8DesktopRuntimeInstalled: Boolean;
-const
-  SubKey = 'Software\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
+var
+  SubKey: String;
 begin
+  SubKey := 'Software\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
   Result := HasNet8DesktopUnderRoot(HKLM64, SubKey) or HasNet8DesktopUnderRoot(HKCU64, SubKey);
 end;
 
