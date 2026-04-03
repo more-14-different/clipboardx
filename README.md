@@ -18,10 +18,12 @@
 
 ## 下载与安装
 
-1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在 Assets 中选 zip（版本号以发布页为准，例如 **1.1.5**）：
-   - **`ClipboardX-*-win-x64-no-runtime.zip`** — 体积小，需已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
+1. 打开 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，在 Assets 中选安装包或 zip（版本号以发布页为准）：
+   - **`ClipboardX-*-setup.exe`** — **Inno（完整版·框架依赖）**：比自包含安装包小；须已安装或先安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)（x64）。未检测到时安装程序会提示并可**打开官方下载页**，装好后再运行 setup。
+   - **`ClipboardX-*-setup-self-contained.exe`** — **Inno（完整版·自包含）**：体积较大，**无需**单独装 .NET，与自包含 zip 等价但带安装向导、开始菜单与卸载项。
+   - **`ClipboardX-*-win-x64-no-runtime.zip`** — 解压即用，需已安装上述桌面运行时
    - **`ClipboardX-*-win-x64-self-contained.zip`** — 自带运行时，无需单独装 .NET
-2. 解压后运行 **`ClipboardX.exe`**。从临时目录启动时，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并可在「应用和功能」中卸载；托盘 **关于** 可查看版本与主页。
+2. 若用 zip：解压后运行 **`ClipboardX.exe`**。从临时目录启动时，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并可在「应用和功能」中卸载；托盘 **关于** 可查看版本与主页。
 3. **检查更新**：托盘右键 → **检查更新…**，对比 GitHub Releases；若有新版，会按当前是否使用共享运行时选择 **no-runtime** 或 **self-contained** 包，关闭程序后覆盖并重启。需可访问 GitHub（含 `api.github.com`）。**设置 → 剪贴板 → 启动时检查更新**（默认开）会在启动约 45 秒后静默查询；若有新版仅**托盘气泡**提示，同一发行版只提示一次，仍须手动「检查更新…」下载安装。
 
 ### SmartScreen「Windows 已保护你的电脑」
@@ -211,6 +213,22 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
   -p:EnableCompressionInSingleFile=true -o ./out/sc
 ```
 
+**多 Flavor（与 CI 一致，可选）：** 默认 `ClipboardXProduct=Full`；仅剪贴板或仅文件跳转时需显式传入，输出 exe 名与 GitHub 上 zip 前缀才会一致（「检查更新」靠此前缀匹配附件）。
+
+```bash
+# 仅剪贴板
+dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
+  -p:ClipboardXProduct=ClipboardOnly \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:IncludeAllContentForSelfExtract=true -o ./out/clip
+
+# 仅文件对话框跳转（建议先编 ShellNavigate DLL）
+dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
+  -p:ClipboardXProduct=FileJumpOnly \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:IncludeAllContentForSelfExtract=true -o ./out/jump
+```
+
 单文件会把内嵌 DLL 解压到临时目录；运行时通过 `AppContext.BaseDirectory` 加载 **`ClipboardXShellNavigate*.dll`**。打 **`v*`** 标签推送后，Actions 会构建并上传 Releases。
 
 ## 环境与要求
@@ -233,6 +251,13 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 完整历史见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，以下摘录主要变更。
+
+### v1.2.0
+
+- **文件跳转**：切回对话框时路径同步与列表刷新优化；快照 / 自动同步采用**分层短等**（先快试再补等），响应更敏捷  
+- **发布物**：GitHub「检查更新」按当前产品前缀匹配 zip，避免多 Flavor 附件误选；Inno 提供 **setup**（框架依赖，缺 .NET 8 桌面运行时时可打开下载页）与 **setup-self-contained**（自包含）两种安装包；CI 产物说明同步  
+- **设置界面**：暗色主题下自定义 `TabControl` / 标签页模板，告别「外深内白」与标签对比度不佳  
+- 其它修复与改进见提交记录
 
 ### v1.1.6
 

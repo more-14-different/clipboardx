@@ -305,10 +305,10 @@ public partial class App : Application
 
                 GitHubUpdateService.ExtractZipToDirectory(zipPath, extractDir);
 
-                if (!File.Exists(Path.Combine(extractDir, "ClipboardX.exe")))
+                if (!File.Exists(Path.Combine(extractDir, AppInfo.PrimaryExecutableFileName)))
                 {
                     System.Windows.MessageBox.Show(
-                        "压缩包内未找到 ClipboardX.exe，已中止。",
+                        $"压缩包内未找到 {AppInfo.PrimaryExecutableFileName}，已中止。",
                         "更新",
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
@@ -375,6 +375,7 @@ public partial class App : Application
             _settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(copy.FileJumpPickerFollowMode);
             _settings.FileJumpPickerAutoPopup = copy.FileJumpPickerAutoPopup;
             _settings.FileJumpPickerOpenWhenDialogForeground = copy.FileJumpPickerOpenWhenDialogForeground;
+            _settings.FileJumpAutoSyncOnReturn = copy.FileJumpAutoSyncOnReturn;
             _settings.Theme = copy.Theme;
             _settings.PopupPosition = copy.PopupPosition;
             _settings.PopupOpacity = copy.PopupOpacity;

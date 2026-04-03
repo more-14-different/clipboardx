@@ -35,11 +35,12 @@ public class AppSettings
     public bool FileJumpPickerOpenWhenDialogForeground { get; set; } = true;
 
     /// <summary>
-    /// 从资源管理器/TC 切回已打开的文件对话框时，若采集到的路径与对话框当前路径不同则自动跳转（实验性）。
+    /// 从资源管理器/TC 切回已打开的文件对话框时，重新采集候选列表；
+    /// 若最新外部文件夹与对话框当前路径不同，则自动跳转（可关闭）。
     /// 与 <see cref="FileJumpPickerOpenWhenDialogForeground"/> 的区别：后者只在「首次」到前台时触发一次，
     /// 此选项在「每次」切回时重新采集并比较。
     /// </summary>
-    public bool FileJumpAutoSyncOnReturn { get; set; } = false;
+    public bool FileJumpAutoSyncOnReturn { get; set; } = true;
 
     /// <summary>
     /// 系统公共文件对话框内跳转时，是否尝试将 Shell 导航 DLL 注入宿主进程（IShellBrowser::BrowseObject）。
@@ -140,6 +141,8 @@ public class AppSettings
                         settings.FileJumpPickerAutoPopup = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerOpenWhenDialogForeground), out _))
                         settings.FileJumpPickerOpenWhenDialogForeground = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoSyncOnReturn), out _))
+                        settings.FileJumpAutoSyncOnReturn = true;
                     if (!doc.RootElement.TryGetProperty(nameof(CheckUpdatesOnStartup), out _))
                         settings.CheckUpdatesOnStartup = true;
                     if (settings.FolderFavorites == null)
@@ -173,6 +176,8 @@ public class AppSettings
                         settings.FileJumpPickerAutoPopup = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerOpenWhenDialogForeground), out _))
                         settings.FileJumpPickerOpenWhenDialogForeground = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoSyncOnReturn), out _))
+                        settings.FileJumpAutoSyncOnReturn = true;
                     if (!doc.RootElement.TryGetProperty(nameof(CheckUpdatesOnStartup), out _))
                         settings.CheckUpdatesOnStartup = true;
                     if (settings.FolderFavorites == null)

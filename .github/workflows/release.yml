@@ -94,23 +94,35 @@ jobs:
           Compress-Archive -Path 'publish/fdd/*' -DestinationPath "$prefix-$v-win-x64-no-runtime.zip" -Force
           Compress-Archive -Path 'publish/sc/*' -DestinationPath "$prefix-$v-win-x64-self-contained.zip" -Force
 
-      - name: Build Inno Setup installer
+      - name: Build Inno Setup 安装包（框架依赖 + 自包含各一）
         if: matrix.flavor == 'Full'
         shell: pwsh
         run: |
           $v = '${{ steps.ver.outputs.version }}'
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$v /DPublishDir=..\publish\sc installer\clipboardx.iss
-          $setup = "installer\Output\ClipboardX-$v-setup.exe"
-          if (-not (Test-Path $setup)) { throw "Missing $setup" }
-          Copy-Item $setup "ClipboardX-$v-setup.exe"
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /DAppVersion=$v /DPublishDir=..\publish\fdd installer\clipboardx.iss
+          $setupFdd = "installer\Output\ClipboardX-$v-setup.exe"
+          if (-not (Test-Path $setupFdd)) { throw "Missing $setupFdd" }
+          Copy-Item $setupFdd "ClipboardX-$v-setup.exe"
+          & $iscc /DAppVersion=$v /DPublishDir=..\publish\sc /DSETUP_SKIP_DOTNET /DSetupOutputSuffix=-setup-self-contained installer\clipboardx.iss
+          $setupSc = "installer\Output\ClipboardX-$v-setup-self-contained.exe"
+          if (-not (Test-Path $setupSc)) { throw "Missing $setupSc" }
+          Copy-Item $setupSc "ClipboardX-$v-setup-self-contained.exe"
 
-      - name: Upload artifacts
+      - name: 上传 zip 产物
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_prefix }}-artifacts
+          path: ${{ matrix.artifact_prefix }}-*.zip
+
+      - name: 上传 Inno 安装包（仅完整版）
+        if: matrix.flavor == 'Full'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipboardX-inno-installer
           path: |
-            ${{ matrix.artifact_prefix }}-*.zip
             ClipboardX-*-setup.exe
+            ClipboardX-*-setup-self-contained.exe
 
   create-release:
     needs: release
@@ -144,7 +156,8 @@ jobs:
             | `ClipboardX-filejump-*` | 仅文件对话框跳转（无剪贴板管理） |
             | `*-no-runtime.zip` | 需预装 .NET 8 运行时 |
             | `*-self-contained.zip` | 自带运行时，开箱即用 |
-            | `*-setup.exe` | Inno Setup 安装包（仅完整版） |
+            | `*-setup.exe` | Inno（完整版·框架依赖）：体积小，需本机 .NET 8 桌面运行时；缺失时安装程序可打开下载页 |
+            | `*-setup-self-contained.exe` | Inno（完整版·自包含）：体积大，无需单独装 .NET |
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -76,6 +76,18 @@ internal static class FileManagerPathCollector
         return TryGetFolderForManagerHwnd(z[j]);
     }
 
+    /// <summary>
+    /// 对任意前台窗口尝试提取其所属文件管理器当前路径；若传入的是子窗口，则自动提升到顶层窗口。
+    /// 仅对资源管理器 / TC / XYplorer / Q-Dir 等受支持的文件管理器返回路径。
+    /// </summary>
+    public static string? TryGetFolderForWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd)) return null;
+        var root = Win32.GetAncestor(hwnd, Win32.GA_ROOT);
+        if (root == IntPtr.Zero) root = hwnd;
+        return TryGetFolderForManagerHwnd(root);
+    }
+
     /// <summary>按 Z 序遍历顶层窗口，收集各文件管理器当前路径；末尾可附加「记忆路径」。</summary>
     public static List<FileJumpCandidate> CollectCandidates(IntPtr dialogHwnd, string? memoryFolder, int zDelta = 2)
     {

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Reflection;
 
 namespace ClipboardManager;
@@ -46,6 +47,34 @@ internal static class AppInfo
             }
 
             return asm.GetName().Version?.ToString(3) ?? "1.0.0";
+        }
+    }
+
+    /// <summary>
+    /// 主程序文件名（含 .exe），与发布包内根目录 exe 一致；
+    /// 用于「检查更新」解压校验与替换后重启；剪裁版为 ClipboardX-clipboard.exe / ClipboardX-filejump.exe。
+    /// </summary>
+    public static string PrimaryExecutableFileName
+    {
+        get
+        {
+            try
+            {
+                var p = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(p))
+                {
+                    var f = Path.GetFileName(p);
+                    if (f.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        return f;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            var name = Assembly.GetExecutingAssembly().GetName().Name;
+            return string.IsNullOrEmpty(name) ? "ClipboardX.exe" : name + ".exe";
         }
     }
 }

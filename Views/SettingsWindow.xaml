@@ -11,6 +11,87 @@
         Height="560"
         Background="{DynamicResource WindowBgBrush}">
 
+    <Window.Resources>
+        <!-- 系统默认 TabControl 内容区为浅色，暗色主题会「外深内白」且标签对比度差；覆盖模板与标签页样式 -->
+        <Style x:Key="SettingsTabControlStyle" TargetType="TabControl">
+            <Setter Property="Background" Value="{DynamicResource WindowBgBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid ClipToBounds="True" KeyboardNavigation.TabNavigation="Local">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TabPanel x:Name="HeaderPanel"
+                                      Grid.Row="0"
+                                      Panel.ZIndex="1"
+                                      Margin="0,0,0,-1"
+                                      IsItemsHost="True"
+                                      Background="Transparent"
+                                      KeyboardNavigation.TabIndex="0" />
+                            <Border Grid.Row="1"
+                                    Background="{DynamicResource WindowBgBrush}"
+                                    BorderBrush="{DynamicResource ThemeBorder}"
+                                    BorderThickness="1"
+                                    CornerRadius="0,6,6,6"
+                                    KeyboardNavigation.DirectionalNavigation="Contained"
+                                    KeyboardNavigation.TabNavigation="Local">
+                                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                                  Margin="0"
+                                                  ContentSource="SelectedContent" />
+                            </Border>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TabItem">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+            <Setter Property="Background" Value="{DynamicResource FooterBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}" />
+            <Setter Property="BorderThickness" Value="1,1,1,0" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBorder"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6,6,0,0">
+                            <ContentPresenter x:Name="HeaderSite"
+                                              ContentSource="Header"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource WindowBgBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+                                <Setter TargetName="TabBorder" Property="BorderThickness" Value="1,1,1,0" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsSelected" Value="False" />
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource SurfaceBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
@@ -20,6 +101,7 @@
         <TabControl x:Name="MainTabs"
                     Grid.Row="0"
                     Margin="12,12,12,8"
+                    Style="{StaticResource SettingsTabControlStyle}"
                     Foreground="{DynamicResource PrimaryText}">
 
             <TabItem x:Name="ClipboardTab" Header="剪贴板">
@@ -185,7 +267,7 @@
                     <sys:String x:Key="FolderJumpHelp_AutoClick_Title">点击后自动跳转</sys:String>
                     <sys:String x:Key="FolderJumpHelp_AutoClick_Body">打开/保存对话框成为前台后，第一次在该对话框内点击左键时自动跳到候选列表第一条；同一对话框窗口存续期内只自动跳一次（关掉再开才会再次触发）。多候选跳转列表打开期间不触发。</sys:String>
                     <sys:String x:Key="FolderJumpHelp_AutoSync_Title">切回时自动同步路径</sys:String>
-                    <sys:String x:Key="FolderJumpHelp_AutoSync_Body">实验性：从资源管理器/TC 等切回已打开的文件对话框时，重新采集路径，若首条候选与对话框当前所在目录不同则自动跳转。与「对话框到前台自动执行」配合：后者仅在首次到前台时触发，本选项在每次切回时生效。</sys:String>
+                    <sys:String x:Key="FolderJumpHelp_AutoSync_Body">从资源管理器/TC 等切回已打开的文件对话框时，会重新采集并刷新候选列表；开启时，若最近一次外部文件夹与对话框当前目录不同，则自动跳转过去。与「对话框到前台自动执行」配合：后者只处理首次到前台，本项处理每次切回。</sys:String>
                     <Style x:Key="FolderJumpHelpGlyphLabel" TargetType="Label">
                         <Setter Property="Padding" Value="0" />
                         <Setter Property="Margin" Value="6,0,0,0" />
@@ -493,19 +575,23 @@
             </TabItem>
         </TabControl>
 
-        <StackPanel Grid.Row="1"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Margin="16,0,16,14">
-            <Button Content="取消"
-                    Width="80" Height="34" Margin="0,0,12,0"
-                    FontSize="13" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
-                    BorderBrush="{DynamicResource ThemeBorder}" Click="Cancel_Click" Cursor="Hand" />
-            <Button Content="保存"
-                    Width="80" Height="34"
-                    FontSize="13" Background="{DynamicResource AccentBg}" Foreground="{DynamicResource AccentFg}"
-                    BorderBrush="Transparent" FontWeight="SemiBold"
-                    Click="Save_Click" Cursor="Hand" />
-        </StackPanel>
+        <Border Grid.Row="1"
+                Background="{DynamicResource FooterBrush}"
+                BorderThickness="0,1,0,0"
+                BorderBrush="{DynamicResource ThemeSeparator}"
+                Padding="16,12,16,14">
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right">
+                <Button Content="取消"
+                        Width="80" Height="34" Margin="0,0,12,0"
+                        FontSize="13" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
+                        BorderBrush="{DynamicResource ThemeBorder}" Click="Cancel_Click" Cursor="Hand" />
+                <Button Content="保存"
+                        Width="80" Height="34"
+                        FontSize="13" Background="{DynamicResource AccentBg}" Foreground="{DynamicResource AccentFg}"
+                        BorderBrush="Transparent" FontWeight="SemiBold"
+                        Click="Save_Click" Cursor="Hand" />
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>

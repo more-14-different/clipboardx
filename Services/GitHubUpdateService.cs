@@ -58,7 +58,8 @@ internal static class GitHubUpdateService
 
         var chosen = PickZipAsset(doc.Assets, PreferNoRuntimeZip());
         if (chosen == null)
-            throw new IOException("该发行版未找到 win-x64（self-contained 或 no-runtime）的 zip 附件。");
+            throw new IOException(
+                "该发行版未找到与当前程序匹配的 win-x64 zip（no-runtime / self-contained）。发行页上需存在与主 exe 前缀一致的包。");
 
         var body = doc.Body ?? "";
         return new LatestReleaseInfo
@@ -91,6 +92,30 @@ internal static class GitHubUpdateService
         }
     }
 
+    /// <summary>
+    /// 与 CI 产物一致：zip 名为 {主程序不含扩展名}-{version}-win-x64-*.zip；多 Flavor 并存时不能用仅后缀匹配。
+    /// </summary>
+    private static bool AssetMatchesCurrentProduct(string assetName)
+    {
+        if (string.IsNullOrEmpty(assetName)) return false;
+        var stem = Path.GetFileNameWithoutExtension(AppInfo.PrimaryExecutableFileName);
+        if (string.IsNullOrEmpty(stem)) stem = "ClipboardX";
+
+        if (!assetName.StartsWith(stem + "-", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // 主程序名为 ClipboardX 时，必须排除子产品 zip（否则仅 「ClipboardX-」 会误匹配）
+        if (string.Equals(stem, "ClipboardX", StringComparison.OrdinalIgnoreCase))
+        {
+            if (assetName.StartsWith("ClipboardX-clipboard-", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (assetName.StartsWith("ClipboardX-filejump-", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
+    }
+
     private static ReleaseAssetInfo? PickZipAsset(List<GitHubAssetDoc>? assets, bool preferNoRuntime)
     {
         if (assets == null || assets.Count == 0) return null;
@@ -101,6 +126,7 @@ internal static class GitHubUpdateService
             {
                 if (a.Name is not { Length: > 0 } n || string.IsNullOrEmpty(a.BrowserDownloadUrl)) continue;
                 if (!n.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!AssetMatchesCurrentProduct(n)) continue;
                 return new ReleaseAssetInfo
                 {
                     Name = n,
@@ -173,7 +199,8 @@ internal static class GitHubUpdateService
         var extract = EscapeForPowerShellSingleQuoted(Path.GetFullPath(extractDir));
         var install = EscapeForPowerShellSingleQuoted(Path.GetFullPath(installDir));
         var root = EscapeForPowerShellSingleQuoted(Path.GetFullPath(cleanupRoot));
-        var exe = EscapeForPowerShellSingleQuoted(Path.Combine(Path.GetFullPath(installDir), "ClipboardX.exe"));
+        var exe = EscapeForPowerShellSingleQuoted(
+            Path.Combine(Path.GetFullPath(installDir), AppInfo.PrimaryExecutableFileName));
 
         var sb = new StringBuilder(512);
         sb.AppendLine("$ErrorActionPreference = 'Stop'");

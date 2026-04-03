@@ -69,6 +69,8 @@ public partial class FileDialogJumpPickerWindow : Window
     private readonly ObservableCollection<FileJumpPickerRow> _displayRows = new();
 
     public string? SelectedPath { get; private set; }
+    public IntPtr OwnerDialogHwnd => _fileDialogOwnerHwnd;
+    public bool IsAutoForegroundStickyMode => _autoForegroundStickyMode;
 
     public FileDialogJumpPickerWindow(
         IReadOnlyList<FileJumpCandidate> collectorItems,
@@ -990,6 +992,28 @@ public partial class FileDialogJumpPickerWindow : Window
             CommitNavigateKeepOpen(path);
         else
             CommitAndClose(path);
+    }
+
+    /// <summary>
+    /// 外部文件管理器路径变化后，刷新当前候选列表并尽量保持用户关注的路径选中。
+    /// </summary>
+    public void RefreshCandidatesFromExternal(IReadOnlyList<FileJumpCandidate> fresh, string? preferredPath = null)
+    {
+        var selectedPath = preferredPath;
+        if (string.IsNullOrEmpty(selectedPath) && ItemsList.SelectedItem is FileJumpPickerRow row)
+            selectedPath = row.Path;
+        ApplyNavigateKeepOpenListRefresh(selectedPath ?? "", fresh.ToList());
+    }
+
+    /// <summary>
+    /// 粘性模式下由外部触发：保持窗口打开，直接导航到目标路径并在完成后刷新列表。
+    /// </summary>
+    public void NavigateKeepOpenToPath(string path)
+    {
+        if (!_autoForegroundStickyMode) return;
+        if (string.IsNullOrWhiteSpace(path)) return;
+        SelectedPath = path;
+        CommitNavigateKeepOpen(path);
     }
 
     private void CommitAndClose(string path)

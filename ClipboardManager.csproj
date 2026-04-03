@@ -17,7 +17,7 @@
     <AssemblyName Condition="'$(ClipboardXProduct)' == 'ClipboardOnly'">ClipboardX-clipboard</AssemblyName>
     <AssemblyName Condition="'$(ClipboardXProduct)' == 'FileJumpOnly'">ClipboardX-filejump</AssemblyName>
 
-    <Version>1.1.7</Version>
+    <Version>1.2.0</Version>
     <Product>ClipboardX</Product>
     <Company>ClipboardX</Company>
     <RepositoryUrl>https://github.com/chaojimct/clipboardx</RepositoryUrl>
@@ -50,6 +50,7 @@
   <ItemGroup>
     <Compile Remove="tools\**\*" />
     <Compile Remove="ClipboardX\**\*" />
+    <Compile Remove="artifacts\**\*" />
   </ItemGroup>
 
   <!-- 原生 Shell 跳转 DLL：须 Link 到输出根目录（与 ShellDialogDeepNavigate 用 BaseDirectory\*.dll 解析一致）；否则默认会落在 native\...\bin\... 子目录下单文件解压后仍找不到 -->

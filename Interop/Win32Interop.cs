@@ -31,6 +31,7 @@ internal static class Win32
     public const int INPUT_KEYBOARD = 1;
     public const uint KEYEVENTF_KEYUP = 0x0002;
     public const uint KEYEVENTF_UNICODE = 0x0004;
+    public const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     public const ushort VK_CONTROL = 0x11;
     public const ushort VK_V = 0x56;
     public const ushort VK_L = 0x4C;
