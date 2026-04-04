@@ -10,6 +10,8 @@ obj/
 build/
 publish/
 publish-self-contained/
+installer/Output/
+ClipboardX-*-win-x64-*.zip
 
 ClipboardX/
 

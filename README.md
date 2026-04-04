@@ -219,6 +219,34 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
   -p:EnableCompressionInSingleFile=true -o ./out/sc
 ```
 
+### Windows：完整版 + Inno 安装包（与 CI / `release.yml` 一致）
+
+需 **Inno Setup 6**（例如 `winget install JRSoftware.InnoSetup`）。若装到当前用户目录，编译器常见路径为 **`%LocalAppData%\Programs\Inno Setup 6\ISCC.exe`**；否则会落在 **`Program Files (x86)\Inno Setup 6\ISCC.exe`**。版本号 **`$v`** 请与 **`ClipboardManager.csproj`** 里 `<Version>` 一致。
+
+```powershell
+# 在仓库根目录执行
+$v = "1.2.5"   # 与 csproj 同步后改这里
+Set-ExecutionPolicy -Scope Process -Bypass -Force
+.\native\ShellNavigate\build.ps1
+
+dotnet publish ClipboardManager.csproj -c Release -r win-x64 `
+  -p:ClipboardXProduct=Full -p:SelfContained=false -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true `
+  -p:DebugType=None -p:Version=$v -o publish/fdd
+
+dotnet publish ClipboardManager.csproj -c Release -r win-x64 `
+  -p:ClipboardXProduct=Full -p:SelfContained=true -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true `
+  -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:Version=$v -o publish/sc
+
+$iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+& $iscc /DAppVersion=$v /DPublishDir=..\publish\fdd installer\clipboardx.iss
+& $iscc /DAppVersion=$v /DPublishDir=..\publish\sc /DSETUP_SKIP_DOTNET /DSetupOutputSuffix=-setup-self-contained installer\clipboardx.iss
+```
+
+产物：**`installer\Output\ClipboardX-{v}-setup.exe`**（框架依赖，含 .NET 检测）与 **`ClipboardX-{v}-setup-self-contained.exe`**。可选：`Compress-Archive publish\fdd\* ClipboardX-$v-win-x64-no-runtime.zip`，以及对 `publish\sc` 做 **self-contained** zip，命名与 Releases 附件一致。
+
 **多 Flavor（与 CI 一致，可选）：** 默认 `ClipboardXProduct=Full`；仅剪贴板或仅文件跳转时需显式传入，输出 exe 名与 GitHub 上 zip 前缀才会一致（「检查更新」靠此前缀匹配附件）。
 
 ```bash
@@ -257,6 +285,10 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 完整历史见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，以下摘录主要变更。
+
+### v1.2.5
+
+- **安装包**：Inno 安装前 .NET 8 桌面运行时检测增加与 `dotnet --list-runtimes` 一致的目录后备判断（`Program Files\dotnet\shared\Microsoft.WindowsDesktop.App\8.*`），并补充 arm64 注册表路径，避免本机已装运行时仍误提示未安装
 
 ### v1.2.4
 

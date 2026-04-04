@@ -96,12 +96,51 @@ begin
     end;
 end;
 
+{ 与 dotnet.exe --list-runtimes 展示的路径一致：共享框架目录下存在 8.x 子目录即视为已安装桌面运行时。
+  部分环境仅 RegGetSubkeyNames 读不到 InstalledVersions（仍无法解释时至少不误拦）。 }
+function HasNet8DesktopVersionSubdir(const BaseDir: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := False;
+  if (BaseDir = '') or not DirExists(BaseDir) then
+    Exit;
+  if FindFirst(AddBackslash(BaseDir) + '*', FindRec) then
+  try
+    repeat
+      if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+          if Pos('8.', FindRec.Name) = 1 then
+          begin
+            Result := True;
+            Break;
+          end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
 function IsDotNet8DesktopRuntimeInstalled: Boolean;
 var
-  SubKey: String;
+  SubKeyX64, SubKeyArm64: String;
+  Base: String;
 begin
-  SubKey := 'Software\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
-  Result := HasNet8DesktopUnderRoot(HKLM64, SubKey) or HasNet8DesktopUnderRoot(HKCU64, SubKey);
+  SubKeyX64 := 'Software\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
+  SubKeyArm64 := 'Software\dotnet\Setup\InstalledVersions\arm64\sharedfx\Microsoft.WindowsDesktop.App';
+  Result :=
+    HasNet8DesktopUnderRoot(HKLM64, SubKeyX64) or
+    HasNet8DesktopUnderRoot(HKCU64, SubKeyX64) or
+    HasNet8DesktopUnderRoot(HKLM64, SubKeyArm64) or
+    HasNet8DesktopUnderRoot(HKCU64, SubKeyArm64);
+  if Result then
+    Exit;
+  Base := ExpandConstant('{pf64}\dotnet\shared\Microsoft.WindowsDesktop.App');
+  Result := HasNet8DesktopVersionSubdir(Base);
+  if Result then
+    Exit;
+  Base := ExpandConstant('{pf}\dotnet\shared\Microsoft.WindowsDesktop.App');
+  Result := HasNet8DesktopVersionSubdir(Base);
 end;
 
 function InitializeSetup: Boolean;
