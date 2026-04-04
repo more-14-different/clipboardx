@@ -3778,6 +3778,14 @@ public partial class PopupWindow : Window
         Win32.SendInput(3, inputs, Marshal.SizeOf<Win32.INPUT>());
     }
 
+#if CLIPX_FILEJUMP
+    private static bool IsSystemExplorerForeground()
+    {
+        var fg = Win32.GetForegroundWindow();
+        return FileManagerPathCollector.TryFindExplorerCabinetFrame(fg) != IntPtr.Zero;
+    }
+#endif
+
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode < 0)
@@ -3842,6 +3850,13 @@ public partial class PopupWindow : Window
         {
             if (_activeFileJumpPicker != null)
                 return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+#if CLIPX_FILEJUMP
+            // 剪贴板浮层仍显示但焦点已在系统资源管理器时，必须放行低级键盘链，
+            // 否则后装的钩子无法收到按键（资源管理器内 Everything 筛选等）。
+            if (IsSystemExplorerForeground())
+                return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+#endif
 
             if (isKeyUp && IsMenuAltVk(kb.vkCode) && !_ctxAltAwaitRelease)
             {

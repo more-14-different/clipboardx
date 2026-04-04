@@ -32,6 +32,9 @@ public partial class SettingsWindow : Window
     private bool _pendingFileJumpOpenWhenDialogForeground = true;
     private bool _pendingFileJumpAutoOnFirstClick;
     private bool _pendingFileJumpAutoSyncOnReturn;
+#if CLIPX_FILEJUMP
+    private bool _pendingExplorerEverythingQuickFind;
+#endif
     private string _pendingModifierKey;
     private bool _pendingBatchPasteMergeText;
     private bool _pendingBatchQueueAutoSwitchToNormalAfterQueueDone;
@@ -59,6 +62,7 @@ public partial class SettingsWindow : Window
 #endif
 #if !CLIPX_FILEJUMP
         FileJumpTab.Visibility = Visibility.Collapsed;
+        ExperimentalFeaturesTab.Visibility = Visibility.Collapsed;
         CustomDialogTab.Visibility = Visibility.Collapsed;
 #endif
 
@@ -115,6 +119,17 @@ public partial class SettingsWindow : Window
 
         _pendingFileJumpAutoSyncOnReturn = settings.FileJumpAutoSyncOnReturn;
         FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
+
+#if CLIPX_FILEJUMP
+        _pendingExplorerEverythingQuickFind = settings.ExplorerEverythingQuickFindEnabled;
+        ExplorerEverythingQuickFindText.Text = _pendingExplorerEverythingQuickFind ? "开启" : "关闭";
+        ExplorerEverythingMaxResultsBox.Text = settings.ExplorerEverythingQuickFindMaxResults.ToString();
+#else
+        ExplorerEverythingQuickFindText.Text = "—";
+        ExplorerEverythingMaxResultsBox.Text = "—";
+        ExplorerEverythingQuickFindText.IsEnabled = false;
+        ExplorerEverythingMaxResultsBox.IsEnabled = false;
+#endif
 
         PreviewLinesBox.Text = settings.PreviewMaxLines.ToString();
 
@@ -593,6 +608,14 @@ public partial class SettingsWindow : Window
         FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
     }
 
+    private void ExplorerEverythingQuickFindCycle_Click(object sender, MouseButtonEventArgs e)
+    {
+#if CLIPX_FILEJUMP
+        _pendingExplorerEverythingQuickFind = !_pendingExplorerEverythingQuickFind;
+        ExplorerEverythingQuickFindText.Text = _pendingExplorerEverythingQuickFind ? "开启" : "关闭";
+#endif
+    }
+
     private static string ModifierDisplayName(string m) => m switch
     {
         "Alt" => "Alt",
@@ -720,6 +743,15 @@ public partial class SettingsWindow : Window
             return;
         }
 
+#if CLIPX_FILEJUMP
+        if (!int.TryParse(ExplorerEverythingMaxResultsBox.Text, out var explorerEvMax) || explorerEvMax < 1 || explorerEvMax > 2000)
+        {
+            System.Windows.MessageBox.Show("筛选最大条数应在 1 ~ 2000 之间", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+#endif
+
         _settings.MaxItems = maxItems;
         _settings.HotkeyModifiers = _pendingModifiers;
         _settings.HotkeyKey = _pendingKey;
@@ -741,6 +773,11 @@ public partial class SettingsWindow : Window
         _settings.FileJumpPickerOpenWhenDialogForeground = _pendingFileJumpOpenWhenDialogForeground;
         _settings.FileJumpAutoOnFirstClick = _pendingFileJumpAutoOnFirstClick;
         _settings.FileJumpAutoSyncOnReturn = _pendingFileJumpAutoSyncOnReturn;
+#if CLIPX_FILEJUMP
+        _settings.ExplorerEverythingQuickFindEnabled = _pendingExplorerEverythingQuickFind;
+        _settings.ExplorerEverythingQuickFindMaxResults = explorerEvMax;
+        _settings.UseFindXSearch = false;
+#endif
         _settings.PreviewMaxLines = previewLines;
         _settings.PopupPanelWidth = popupW;
         _settings.PopupPanelMaxHeight = popupH;

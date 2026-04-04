@@ -22,6 +22,9 @@ public partial class App : Application
 #if CLIPX_CLIPBOARD
     private BatchModeCycleHotkeyHost? _batchModeHotkeyHost;
 #endif
+#if CLIPX_FILEJUMP
+    private ExplorerQuickFindController? _explorerQuickFind;
+#endif
     private AppSettings _settings = new();
     private static bool _probingAssemblyResolveRegistered;
 
@@ -146,6 +149,9 @@ public partial class App : Application
 
         SetupTrayIcon(e.Args);
         _popup.ShellForegroundMayOccludePopup += OnPopupShellForegroundMayOcclude;
+#if CLIPX_FILEJUMP
+        SyncExplorerQuickFindHook();
+#endif
         _ = CheckForUpdatesOnStartupAsync();
     }
 
@@ -492,6 +498,11 @@ public partial class App : Application
             _settings.BatchPasteMergeText = copy.BatchPasteMergeText;
             _settings.BatchQueueAutoSwitchToNormalAfterQueueDone = copy.BatchQueueAutoSwitchToNormalAfterQueueDone;
             _settings.PasteSimulationMode = PasteSimulationModes.Normalize(copy.PasteSimulationMode);
+#if CLIPX_FILEJUMP
+            _settings.ExplorerEverythingQuickFindEnabled = copy.ExplorerEverythingQuickFindEnabled;
+            _settings.ExplorerEverythingQuickFindMaxResults = copy.ExplorerEverythingQuickFindMaxResults;
+            SyncExplorerQuickFindHook();
+#endif
             StartupRegistration.Apply(_settings.RunAtStartup, _settings.RunAsAdministrator);
             _settings.Save();
             _popup?.ApplySettings(_settings);
@@ -540,6 +551,22 @@ public partial class App : Application
         _settings.BatchModeCycleHotkeyModifiers = _batchModeHotkeyHost.CurrentModifiers;
         _settings.BatchModeCycleHotkeyKey = _batchModeHotkeyHost.CurrentKey;
         _settings.Save();
+    }
+#endif
+
+#if CLIPX_FILEJUMP
+    /// <summary>按设置安装或卸载资源管理器内 Everything 筛选钩子。</summary>
+    private void SyncExplorerQuickFindHook()
+    {
+        if (!_settings.ExplorerEverythingQuickFindEnabled)
+        {
+            _explorerQuickFind?.Dispose();
+            _explorerQuickFind = null;
+            return;
+        }
+
+        _explorerQuickFind ??= new ExplorerQuickFindController(Dispatcher, _settings);
+        _explorerQuickFind.Start();
     }
 #endif
 
@@ -804,6 +831,10 @@ public partial class App : Application
         _batchModeHotkeyHost = null;
 #endif
         _popup?.Cleanup();
+#if CLIPX_FILEJUMP
+        _explorerQuickFind?.Dispose();
+        _explorerQuickFind = null;
+#endif
         if (_trayIcon != null)
         {
             _trayIcon.Visible = false;
