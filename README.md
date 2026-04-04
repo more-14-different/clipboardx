@@ -225,7 +225,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ```powershell
 # 在仓库根目录执行
-$v = "1.2.5"   # 与 csproj 同步后改这里
+$v = "1.2.6"   # 与 csproj 同步后改这里
 Set-ExecutionPolicy -Scope Process -Bypass -Force
 .\native\ShellNavigate\build.ps1
 
@@ -285,6 +285,11 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 完整历史见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，以下摘录主要变更。
+
+### v1.2.6
+
+- **文件跳转**：「切回时自动同步路径」仅在前一次前台为可解析路径的外部文件管理器时才用资源管理器侧目录驱动自动跳转，避免在对话框内手动改路径后到其它程序再切回被误拉回旧目录
+- **兼容**：排除 Internet Download Manager（`IDMan.exe`）主界面被误判为 `#32770` 公共对话框（减少误触发跳转与整窗控件树枚举带来的卡顿）
 
 ### v1.2.5
 

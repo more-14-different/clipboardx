@@ -1200,9 +1200,10 @@ public partial class PopupWindow : Window
 
         if (FileDialogJumpHelper.IsLikelyFileDialog(hwnd))
         {
+            var prevForAutoSync = prev;
             ScheduleSnapshotFolderFromDialog(hwnd);
             Dispatcher.BeginInvoke(() => TryAutoOpenFileJumpPickerWhenDialogForeground(hwnd));
-            Dispatcher.BeginInvoke(() => TryAutoSyncPathOnDialogReturn(hwnd));
+            Dispatcher.BeginInvoke(() => TryAutoSyncPathOnDialogReturn(hwnd, prevForAutoSync));
         }
 
         Dispatcher.BeginInvoke(() => UpdateFileJumpClickToNavigateArm(hwnd));
@@ -1577,7 +1578,8 @@ public partial class PopupWindow : Window
     /// 对话框再次到前台时，重新采集候选路径；
     /// 若能确定最近一次外部文件管理器路径，且与对话框当前路径不同，则自动同步过去。
     /// </summary>
-    private void TryAutoSyncPathOnDialogReturn(IntPtr foregroundHwnd)
+    /// <param name="previousForegroundHwnd">本次获得前台之前的窗口；仅当其为可解析目录的外部管理器时才用 <see cref="_lastExternalFolder"/> 驱动跳转，避免用户在对话框内改路径后到其它程序再切回被误拉到资源管理器旧目录。</param>
+    private void TryAutoSyncPathOnDialogReturn(IntPtr foregroundHwnd, IntPtr previousForegroundHwnd)
     {
         if (_appSettings == null) return;
         if (foregroundHwnd == IntPtr.Zero) return;
@@ -1594,6 +1596,7 @@ public partial class PopupWindow : Window
         var scheduleGen = _fileJumpAutoSyncScheduleGen;
         var hwndCapture = dialogHwnd;
         var rootCapture = dialogRoot;
+        var prevCapture = previousForegroundHwnd;
 
         void SchedulePrecheck(int phase)
         {
@@ -1614,7 +1617,7 @@ public partial class PopupWindow : Window
 
                 try
                 {
-                    TryAutoSyncPathOnDialogReturnCore(hwndCapture, rootCapture);
+                    TryAutoSyncPathOnDialogReturnCore(hwndCapture, rootCapture, prevCapture);
                 }
                 catch (Exception ex)
                 {
@@ -1627,6 +1630,16 @@ public partial class PopupWindow : Window
         SchedulePrecheck(0);
     }
 
+    /// <summary>仅当前台刚从「能采到文件夹路径、且不是文件对话框」的窗口切来时，才信任 <see cref="_lastExternalFolder"/> 作为自动同步目标。</summary>
+    private bool ShouldPreferLastExternalFolderForAutoSync(IntPtr previousForegroundHwnd)
+    {
+        if (previousForegroundHwnd == IntPtr.Zero || previousForegroundHwnd == _hwnd || !Win32.IsWindow(previousForegroundHwnd))
+            return false;
+        if (FileDialogJumpHelper.IsLikelyFileDialog(previousForegroundHwnd)) return false;
+        var folder = FileManagerPathCollector.TryGetFolderForWindow(previousForegroundHwnd);
+        return !string.IsNullOrWhiteSpace(folder);
+    }
+
     /// <summary>切回同步前：前台根窗口已与目标对话框一致（分层短等后再判）。</summary>
     private bool TryAutoSyncForegroundStable(IntPtr dialogHwnd, IntPtr dialogRoot)
     {
@@ -1637,7 +1650,7 @@ public partial class PopupWindow : Window
         return fgRoot == dialogRoot;
     }
 
-    private void TryAutoSyncPathOnDialogReturnCore(IntPtr dialogHwnd, IntPtr dialogRoot)
+    private void TryAutoSyncPathOnDialogReturnCore(IntPtr dialogHwnd, IntPtr dialogRoot, IntPtr previousForegroundHwnd)
     {
         if (_appSettings == null) return;
         if (!Win32.IsWindow(dialogHwnd)) return;
@@ -1647,7 +1660,8 @@ public partial class PopupWindow : Window
         if (fgRoot != dialogRoot) return;
 
         var allowShellInject = _appSettings.EnableShellNavigateInject;
-        var preferredExternalFolder = _lastExternalFolder?.Trim() ?? "";
+        var preferLastExternal = ShouldPreferLastExternalFolderForAutoSync(previousForegroundHwnd);
+        var preferredExternalFolder = preferLastExternal ? (_lastExternalFolder?.Trim() ?? "") : "";
         var mem = !string.IsNullOrEmpty(preferredExternalFolder)
             ? preferredExternalFolder
             : _appSettings.LastFileDialogFolder?.Trim();

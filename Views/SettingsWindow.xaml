@@ -267,7 +267,7 @@
                     <sys:String x:Key="FolderJumpHelp_AutoClick_Title">点击后自动跳转</sys:String>
                     <sys:String x:Key="FolderJumpHelp_AutoClick_Body">打开/保存对话框成为前台后，第一次在该对话框内点击左键时自动跳到候选列表第一条；同一对话框窗口存续期内只自动跳一次（关掉再开才会再次触发）。多候选跳转列表打开期间不触发。</sys:String>
                     <sys:String x:Key="FolderJumpHelp_AutoSync_Title">切回时自动同步路径</sys:String>
-                    <sys:String x:Key="FolderJumpHelp_AutoSync_Body">从资源管理器/TC 等切回已打开的文件对话框时，会重新采集并刷新候选列表；开启时，若最近一次外部文件夹与对话框当前目录不同，则自动跳转过去。与「对话框到前台自动执行」配合：后者只处理首次到前台，本项处理每次切回。</sys:String>
+                    <sys:String x:Key="FolderJumpHelp_AutoSync_Body">从资源管理器/TC 等切回已打开的文件对话框时，会重新采集并刷新候选列表；开启时，若最近一次外部文件夹与对话框当前目录不同，则自动跳转过去（仅当前一次前台在「能采到路径的文件管理器」上时才按外部目录同步，避免在对话框里改路径后到其它程序再切回被误拉回资源管理器旧路径）。与「对话框到前台自动执行」配合：后者只处理首次到前台，本项处理每次切回。</sys:String>
                     <Style x:Key="FolderJumpHelpGlyphLabel" TargetType="Label">
                         <Setter Property="Padding" Value="0" />
                         <Setter Property="Margin" Value="6,0,0,0" />

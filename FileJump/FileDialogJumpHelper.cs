@@ -35,6 +35,13 @@ internal static class FileDialogJumpHelper
         if (!Win32.GetWindowClassName(hwnd).Equals("#32770", StringComparison.Ordinal))
             return FileDialogKind.None;
 
+        // Internet Download Manager 主界面为 #32770 + Explorer 风格子控件，易误判为公共对话框，
+        // 且会触发下方整树 Class 收集导致明显卡顿。无 owner 的顶层且标题不像打开/保存时视为其主壳，不参与跳转。
+        if (TryGetExeBaseNameLower(hwnd, out var idmExe) && idmExe == "idman"
+            && Win32.GetWindow(hwnd, Win32.GW_OWNER) == IntPtr.Zero
+            && !IsFileDialogTitle(Win32.GetWindowText(hwnd)))
+            return FileDialogKind.None;
+
         var classes = CollectDescendantClassNames(hwnd);
         var hasDirect = classes.Any(c => c.Contains("DirectUIHWND", StringComparison.Ordinal));
         var hasList = classes.Contains("SysListView32", StringComparer.OrdinalIgnoreCase);
