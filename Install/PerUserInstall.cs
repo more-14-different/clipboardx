@@ -23,7 +23,7 @@ public static class PerUserInstall
             InstallRootRelative);
 
     public static string InstalledExecutablePath =>
-        Path.Combine(InstallDirectory, "ClipboardX.exe");
+        Path.Combine(InstallDirectory, AppInfo.PrimaryExecutableFileName);
 
     public static string DisplayName => "ClipboardX";
 
@@ -210,7 +210,6 @@ public static class PerUserInstall
     /// </summary>
     public static void EnsureUninstallRegistrationIfNeeded()
     {
-        if (AppPaths.IsPortable) return;
         if (!IsRunningFromInstallLocation()) return;
         try
         {
@@ -316,7 +315,6 @@ public static class PerUserInstall
         _ = args.Count;
         return false;
 #else
-        if (AppPaths.IsPortable) return false;
         if (!ShouldUsePerUserInstallPipeline()) return false;
         if (IsRunningFromInstallLocation()) return false;
 
@@ -333,6 +331,8 @@ public static class PerUserInstall
                 CopyFrameworkDeploymentFiles(sourceDir, InstallDirectory);
             else
                 File.Copy(source, InstalledExecutablePath, overwrite: true);
+
+            AppPaths.MergePortableDataDirectoryIntoPerUserLayout(Path.Combine(sourceDir, "Data"));
         }
         catch (Exception ex)
         {
@@ -373,7 +373,7 @@ public static class PerUserInstall
     }
 
     /// <summary>
-    /// 结束「可执行文件路径等于安装目录下 ClipboardX.exe」的进程，避免覆盖时被 Windows 锁定导致 Access denied。
+    /// 结束「可执行文件路径等于安装目录下主 exe」的进程，避免覆盖时被 Windows 锁定导致 Access denied。
     /// 典型场景：卸载后托盘进程未退出、或延迟删除尚未完成。
     /// </summary>
     private static void TryStopProcessesRunningFromInstallDirectory()

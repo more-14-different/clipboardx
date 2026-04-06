@@ -5,14 +5,12 @@ namespace ClipboardManager;
 
 /// <summary>
 /// 统一管理应用的所有数据路径。
-/// 安装模式：DataRoot = %LocalAppData%\ClipboardX
-/// 便携模式：DataRoot = exe 同级 Data\
+/// 自解压 / U 盘等路径运行（默认）：DataRoot = exe 同级 Data\
+/// 仅当进程位于按用户安装目录（%LocalAppData%\Programs\ClipboardX 下主 exe）时：DataRoot = %LocalAppData%\ClipboardX
 /// 必须在 App.OnStartup 最早期调用 <see cref="Initialize"/>。
 /// </summary>
 internal static class AppPaths
 {
-    private const string PortableSentinel = "ClipboardX.portable";
-
 #if CLIPX_FULL
     private const string ProductDirName = "ClipboardX";
     public const string MutexName = "ClipboardX_F7A2E9B0";
@@ -30,7 +28,7 @@ internal static class AppPaths
     private static string? _dataRoot;
     private static bool _isPortable;
 
-    /// <summary>是否处于便携模式（exe 同级存在 ClipboardX.portable 文件）。</summary>
+    /// <summary>是否使用 exe 旁 Data\ 作为数据根（非按用户安装目录运行时均为 true）。</summary>
     public static bool IsPortable => _isPortable;
 
     /// <summary>所有配置、数据库、日志的根目录。</summary>
@@ -66,31 +64,59 @@ internal static class AppPaths
         return AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
-    /// <summary>
-    /// 在 App.OnStartup 最早期调用。检测便携模式，确定 DataRoot，执行旧路径迁移。
-    /// </summary>
-    public static void Initialize()
+    /// <summary>在 App.OnStartup 最早期调用。根据是否从安装目录启动确定 DataRoot；安装布局下执行旧路径迁移。</summary>
+    /// <param name="runningFromPerUserInstall">
+    /// 为 true 时表示当前进程路径等于按用户安装目录中的主程序（%LocalAppData%\Programs\ClipboardX\*.exe）。
+    /// </param>
+    public static void Initialize(bool runningFromPerUserInstall)
     {
         var exeDir = GetExeDirectory();
-        var sentinel = Path.Combine(exeDir, PortableSentinel);
 
-        if (File.Exists(sentinel))
-        {
-            _isPortable = true;
-            _dataRoot = Path.Combine(exeDir, "Data");
-        }
-        else
+        if (runningFromPerUserInstall)
         {
             _isPortable = false;
             _dataRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 ProductDirName);
         }
+        else
+        {
+            _isPortable = true;
+            _dataRoot = Path.Combine(exeDir, "Data");
+        }
 
         Directory.CreateDirectory(_dataRoot);
 
         if (!_isPortable)
             MigrateLegacyPaths();
+    }
+
+    /// <summary>
+    /// 从「解压目录\Data」安装到用户 Programs 时，将尚未存在于 %LocalAppData%\{Product} 的文件复制过去，避免设置与历史丢失。
+    /// </summary>
+    internal static void MergePortableDataDirectoryIntoPerUserLayout(string portableDataDir)
+    {
+        if (string.IsNullOrEmpty(portableDataDir) || !Directory.Exists(portableDataDir))
+            return;
+
+        var target = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ProductDirName);
+        try
+        {
+            Directory.CreateDirectory(target);
+            foreach (var path in Directory.EnumerateFiles(portableDataDir))
+            {
+                var name = Path.GetFileName(path);
+                var dest = Path.Combine(target, name);
+                if (!File.Exists(dest))
+                    File.Copy(path, dest, overwrite: false);
+            }
+        }
+        catch
+        {
+            /* 安装流程仍继续；迁移失败时新实例得到空白或旧 Local 数据 */
+        }
     }
 
     /// <summary>

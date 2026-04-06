@@ -85,19 +85,13 @@ public partial class App : Application
         RegisterProbingAssemblyResolve();
         base.OnStartup(e);
 
-        AppPaths.Initialize();
+        AppPaths.Initialize(PerUserInstall.IsRunningFromInstallLocation());
 
         // WinForms 托盘/上下文菜单在 WPF 宿主中更稳妥
         WinForms.Application.EnableVisualStyles();
         WinForms.Application.SetCompatibleTextRenderingDefault(false);
 
         if (PerUserInstall.TryProcessUninstallArgs(e.Args))
-        {
-            Shutdown();
-            return;
-        }
-
-        if (PerUserInstall.TryInstallToUserProgramsAndRelaunch(e.Args))
         {
             Shutdown();
             return;
@@ -124,7 +118,7 @@ public partial class App : Application
         _popup.Initialize(_settings);
         _popup.SettingsRequested += OpenSettings;
 
-        SetupTrayIcon();
+        SetupTrayIcon(e.Args);
         _ = CheckForUpdatesOnStartupAsync();
     }
 
@@ -182,7 +176,7 @@ public partial class App : Application
         });
     }
 
-    private void SetupTrayIcon()
+    private void SetupTrayIcon(string[] startupArgs)
     {
         _trayIcon = new WinForms.NotifyIcon
         {
@@ -209,8 +203,28 @@ public partial class App : Application
         menu.Items.Add("添加自定义文件对话框…", null, (_, _) => StartCustomFileDialogWizard());
 #endif
         menu.Items.Add(new WinForms.ToolStripSeparator());
-        menu.Items.Add("卸载…", null, (_, _) =>
-            Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
+        if (PerUserInstall.IsRunningFromInstallLocation())
+        {
+            menu.Items.Add("卸载…", null, (_, _) =>
+                Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
+        }
+        else
+        {
+            menu.Items.Add("安装到当前用户…", null, (_, _) =>
+            {
+#if DEBUG
+                System.Windows.MessageBox.Show(
+                    "当前为调试构建，不会复制到「程序」安装目录。请使用 Release 产物测试安装菜单。",
+                    PerUserInstall.DisplayName,
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+#else
+                if (PerUserInstall.TryInstallToUserProgramsAndRelaunch(startupArgs))
+                    Dispatcher.Invoke(Shutdown);
+#endif
+            });
+        }
+
         menu.Items.Add("退出", null, (_, _) =>
             Dispatcher.Invoke(Shutdown));
         _trayIcon.ContextMenuStrip = menu;

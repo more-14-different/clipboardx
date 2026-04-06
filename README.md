@@ -163,18 +163,18 @@
 
 ## 数据与日志
 
-默认数据根目录为 **`%LocalAppData%\ClipboardX\`**（与 `AppPaths` 一致）。**便携模式**：在 exe 同目录放置空文件 **`ClipboardX.portable`**，则配置与数据库落在 **`exe\Data\`** 下。
+**默认（解压即用）**：数据根目录为 **`exe\Data\`**。若通过托盘 **「安装到当前用户…」** 安装并自 **`%LocalAppData%\Programs\ClipboardX\`** 下主程序启动，则与同目录策略一致地改用 **`%LocalAppData%\ClipboardX\`**（多 Flavor 为 `ClipboardX-clipboard`、`ClipboardX-filejump`）。托盘菜单：未安装时显示 **安装**，已安装时显示 **卸载**；不再依赖 `ClipboardX.portable` 文件。
 
 | 位置 | 说明 |
 |------|------|
-| `%LocalAppData%\ClipboardX\settings.json` | 热键、主题、自启动、**启动时检查更新**、最大条数、快捷短语、**文件夹收藏**、文件跳转相关开关等（含 `LastStartupUpdateNotifiedTag`，用于同一版本只气泡一次） |
-| `%LocalAppData%\ClipboardX\custom_file_dialogs.json` | **自定义文件对话框**规则（与设置中导入/导出格式一致） |
-| `%LocalAppData%\ClipboardX\clipboard_history.db` | SQLite：**剪贴板历史**正文（WAL 模式） |
-| `%LocalAppData%\ClipboardX\shell_navigate.log` | **Shell 注入**与相关跳转诊断（UTF-8） |
+| `Data\settings.json`（默认）或 `%LocalAppData%\ClipboardX\settings.json`（安装后） | 热键、主题、自启动、**启动时检查更新**、最大条数、快捷短语、**文件夹收藏**、文件跳转相关开关等（含 `LastStartupUpdateNotifiedTag`，用于同一版本只气泡一次） |
+| `Data\custom_file_dialogs.json` 或 `%LocalAppData%\ClipboardX\custom_file_dialogs.json` | **自定义文件对话框**规则（与设置中导入/导出格式一致） |
+| `Data\clipboard_history.db`（…） | SQLite：**剪贴板历史**正文（WAL 模式） |
+| `Data\shell_navigate.log`（…） | **Shell 注入**与相关跳转诊断（UTF-8） |
 
-**迁移**：若曾使用 **`%AppData%\ClipboardX`** 或旧名 **`%AppData%\ClipboardManager`** 的配置，首次启动会在目标文件不存在时尝试复制到当前数据根（详见 `AppPaths.MigrateLegacyPaths`）。
+**迁移**：在 **安装布局**（`%LocalAppData%\ClipboardX\` 数据根）下，若曾使用 **`%AppData%\ClipboardX`** 或 **`%AppData%\ClipboardManager`**，首次启动会在目标文件不存在时尝试复制到当前数据根（详见 `AppPaths.MigrateLegacyPaths`）。从解压目录执行 **安装到当前用户** 时，会将 **`exe\Data\`** 中尚不存在于目标目录的文件复制过去，减少配置与历史丢失。
 
-**多 Flavor**：仅剪贴板 / 仅文件跳转版本的目录名为 `ClipboardX-clipboard`、`ClipboardX-filejump`（同样在 LocalAppData 下，或为便携 `Data\`）。
+**多 Flavor**：见上表与目录名；安装目录仍以 **`Programs\ClipboardX\`** 下的对应 **主 exe 文件名** 为准。
 
 ## 从源码运行
 
@@ -225,7 +225,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ```powershell
 # 在仓库根目录执行
-$v = "1.2.6"   # 与 csproj 同步后改这里
+$v = "1.2.7"   # 与 csproj 同步后改这里
 Set-ExecutionPolicy -Scope Process -Bypass -Force
 .\native\ShellNavigate\build.ps1
 
@@ -285,6 +285,13 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 完整历史见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，以下摘录主要变更。
+
+### v1.2.7
+
+- **安装与数据**：默认数据根为 **`exe\Data\`**（解压即用）；仅当从 **`%LocalAppData%\Programs\ClipboardX`** 下主程序启动时使用 **`%LocalAppData%\ClipboardX`**（多 Flavor 目录名不变）；取消 **Release** 启动时自动复制到 Programs
+- **托盘**：未安装时显示 **「安装到当前用户…」**，已安装时显示 **「卸载…」**；不再依赖 **`ClipboardX.portable`**
+- **安装**：复制到用户 Programs 时，将 **`exe\Data\`** 中目标侧尚不存在的文件合并到用户配置目录，减少丢设置/历史
+- **其它**：按用户安装目录中的主 exe 名与 **剪裁版** 一致；Debug 下安装菜单避免 CS0162 不可达代码警告
 
 ### v1.2.6
 

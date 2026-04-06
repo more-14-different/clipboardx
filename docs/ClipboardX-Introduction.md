@@ -192,6 +192,6 @@ ClipboardX 对 WPS 实现了六重降级：`ValuePattern.SetValue` → `ComboBox
 
 「检查更新」会按**当前 exe 对应的产品前缀**选择上述 zip，避免多资产并存时误下其它变体。
 
-**系统**：Windows 10 / 11 x64。解压包主文件名为 `ClipboardX.exe`（完整版）或 `ClipboardX-clipboard.exe` / `ClipboardX-filejump.exe`（剪裁版）。exe 旁放置空文件 **`ClipboardX.portable`** 可启用便携数据目录（`Data\`）。详见仓库根目录 **README** 中「数据与日志」。
+**系统**：Windows 10 / 11 x64。解压包主文件名为 `ClipboardX.exe`（完整版）或 `ClipboardX-clipboard.exe` / `ClipboardX-filejump.exe`（剪裁版）。默认数据在 **`exe\Data\`**；托盘「安装到当前用户」后改用 **`%LocalAppData%\ClipboardX\`**（多 Flavor 目录名见 README）。详见仓库根目录 **README** 中「数据与日志」。
 
 托盘右键可**检查更新**、查看关于信息；若使用共享运行时，更新会优先匹配较小的 no-runtime 包。
