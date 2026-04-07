@@ -56,7 +56,7 @@ public class AppSettings
 
     public string Theme { get; set; } = "System";
     public string PopupPosition { get; set; } = "Caret";
-    public double PopupOpacity { get; set; } = 0.95;
+    public double PopupOpacity { get; set; } = 1.0;
     public bool HideOnSameAppClick { get; set; } = true;
     /// <summary>登录 Windows 时自动启动本程序（默认开启）。</summary>
     public bool RunAtStartup { get; set; } = true;

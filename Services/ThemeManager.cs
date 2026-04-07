@@ -29,14 +29,17 @@ public static class ThemeManager
             r["SelectedBrush"] = B(0x45, 0x47, 0x5A);
             r["FooterBrush"] = B(0x18, 0x18, 0x25);
             r["PrimaryText"] = B(0xCD, 0xD6, 0xF4);
-            r["SecondaryText"] = B(0x6C, 0x70, 0x86);
-            r["MutedText"] = B(0x58, 0x5B, 0x70);
-            r["HintText"] = B(0x7F, 0x84, 0x9C);
+            r["SecondaryText"] = B(0x93, 0x98, 0xB2);
+            r["MutedText"] = B(0x74, 0x78, 0x91);
+            r["HintText"] = B(0x9D, 0xA3, 0xBE);
             r["AccentBg"] = B(0x89, 0xB4, 0xFA);
             r["AccentFg"] = B(0x1E, 0x1E, 0x2E);
-            r["ThemeBorder"] = B(0x58, 0x5B, 0x70);
+            r["ThemeBorder"] = B(0x6B, 0x6F, 0x85);
             r["ThemeSeparator"] = B(0x31, 0x32, 0x44);
             r["DangerBg"] = B(0xF3, 0x8B, 0xA8);
+            r["ScrollBarTrackBrush"] = B(0x25, 0x26, 0x37);
+            r["ScrollBarThumbBrush"] = B(0x6A, 0x6E, 0x88);
+            r["ScrollBarThumbHoverBrush"] = B(0x88, 0x8D, 0xA8);
         }
         else
         {
@@ -55,6 +58,9 @@ public static class ThemeManager
             r["ThemeBorder"] = B(0xBC, 0xC0, 0xCC);
             r["ThemeSeparator"] = B(0xCC, 0xD0, 0xDA);
             r["DangerBg"] = B(0xD2, 0x0F, 0x39);
+            r["ScrollBarTrackBrush"] = B(0xE0, 0xE3, 0xEB);
+            r["ScrollBarThumbBrush"] = B(0xB4, 0xB8, 0xC8);
+            r["ScrollBarThumbHoverBrush"] = B(0x98, 0x9E, 0xB2);
         }
     }
 

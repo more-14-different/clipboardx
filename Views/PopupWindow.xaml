@@ -89,7 +89,8 @@
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.ScrollChanged="ItemsList_ScrollChanged"
                          PreviewMouseLeftButtonUp="ItemsList_PreviewMouseUp"
-                         PreviewMouseRightButtonUp="ItemsList_PreviewMouseRightUp">
+                         PreviewMouseRightButtonUp="ItemsList_PreviewMouseRightUp"
+                         PreviewMouseDown="ItemsList_PreviewMouseDown">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Grid>
@@ -206,9 +207,72 @@
 
             <!-- Footer -->
             <Border Grid.Row="3" Padding="14,8" Background="{DynamicResource FooterBrush}" CornerRadius="0,0,12,12">
-                <TextBlock x:Name="FooterHints" Foreground="{DynamicResource MutedText}" FontSize="10"
-                           HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" x:Name="FooterHints" Foreground="{DynamicResource MutedText}" FontSize="10"
+                               VerticalAlignment="Center" Margin="0,0,8,0"
+                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                    <Border x:Name="ShortcutHelpMoreBorder" Grid.Column="1" Padding="6,3" CornerRadius="4" Cursor="Hand"
+                            VerticalAlignment="Center" MouseLeftButtonUp="ShortcutHelpMore_Click">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="more" FontSize="10" Foreground="{DynamicResource HintText}"/>
+                    </Border>
+                </Grid>
             </Border>
+
+            <Popup x:Name="ShortcutHelpPopup" PlacementTarget="{Binding ElementName=ShortcutHelpMoreBorder}"
+                   Placement="Top" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade"
+                   HorizontalOffset="-120" VerticalOffset="-4">
+                <Border Background="{DynamicResource PopupBgBrush}" CornerRadius="10"
+                        Padding="12,14" Margin="8" BorderThickness="1"
+                        BorderBrush="{DynamicResource ThemeBorder}"
+                        MinWidth="220" MaxWidth="320" MaxHeight="400">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.45" Color="Black"/>
+                    </Border.Effect>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  MaxHeight="360">
+                        <TextBlock x:Name="ShortcutHelpFullText" FontSize="12" Foreground="{DynamicResource SecondaryText}"
+                                   TextWrapping="Wrap" LineHeight="18"/>
+                    </ScrollViewer>
+                </Border>
+            </Popup>
+
+            <!-- 空格键：条目大图 / 全文预览气泡（再按空格或 Esc 关闭） -->
+            <Popup x:Name="EntryPreviewPopup" StaysOpen="True" AllowsTransparency="True"
+                   PopupAnimation="Fade" Placement="Right">
+                <Border Background="{DynamicResource PopupBgBrush}" CornerRadius="10"
+                        Padding="12" Margin="12" BorderThickness="1"
+                        BorderBrush="{DynamicResource ThemeBorder}"
+                        MaxWidth="540" MaxHeight="440">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.45" Color="Black"/>
+                    </Border.Effect>
+                    <ScrollViewer x:Name="EntryPreviewScroll" MaxHeight="400"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <TextBlock x:Name="EntryPreviewText" FontSize="13"
+                                       Foreground="{DynamicResource PrimaryText}"
+                                       TextWrapping="Wrap" Visibility="Collapsed"/>
+                            <Image x:Name="EntryPreviewImage" Stretch="Uniform"
+                                   MaxWidth="500" MaxHeight="380" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Popup>
 
             <!-- Context Menu Popup -->
             <Popup x:Name="ContextPopup" StaysOpen="False" Placement="Mouse"
@@ -220,7 +284,7 @@
                         <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.4"/>
                     </Border.Effect>
                     <StackPanel>
-                        <Border Padding="10,7" CornerRadius="6" Cursor="Hand"
+                        <Border x:Name="CtxPasteBorder" Padding="10,7" CornerRadius="6" Cursor="Hand"
                                 MouseLeftButtonUp="CtxPaste_Click">
                             <Border.Style>
                                 <Style TargetType="Border">
@@ -249,7 +313,22 @@
                             </Border.Style>
                             <TextBlock Text="📁 作为文件粘贴（资源管理器）" Foreground="{DynamicResource PrimaryText}" FontSize="13"/>
                         </Border>
-                        <Border Padding="10,7" CornerRadius="6" Cursor="Hand"
+                        <Border x:Name="CtxPasteJsonFileBorder" Padding="10,7" CornerRadius="6" Cursor="Hand"
+                                Visibility="Collapsed"
+                                MouseLeftButtonUp="CtxPasteJsonFile_Click">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <TextBlock Text="📄 粘贴为 JSON 文件（资源管理器）" Foreground="{DynamicResource PrimaryText}" FontSize="13"/>
+                        </Border>
+                        <Border x:Name="CtxShortcutBorder" Padding="10,7" CornerRadius="6" Cursor="Hand"
                                 MouseLeftButtonUp="CtxShortcut_Click">
                             <Border.Style>
                                 <Style TargetType="Border">
@@ -264,7 +343,7 @@
                             <TextBlock x:Name="CtxShortcutText" Text="⚡ 设为快捷短语" Foreground="{DynamicResource PrimaryText}" FontSize="13"/>
                         </Border>
                         <Border Height="1" Background="{DynamicResource ThemeSeparator}" Margin="4,2"/>
-                        <Border Padding="10,7" CornerRadius="6" Cursor="Hand"
+                        <Border x:Name="CtxDeleteBorder" Padding="10,7" CornerRadius="6" Cursor="Hand"
                                 MouseLeftButtonUp="CtxDelete_Click">
                             <Border.Style>
                                 <Style TargetType="Border">
@@ -301,12 +380,12 @@
                            TextWrapping="Wrap"/>
                 <TextBlock Text="短语关键词" FontSize="12"
                            Foreground="{DynamicResource MutedText}" Margin="0,0,0,6"/>
-                <TextBox x:Name="PhraseEditBox" FontSize="13" Padding="8,6"
-                         Background="{DynamicResource SurfaceBrush}"
-                         Foreground="{DynamicResource PrimaryText}"
-                         BorderBrush="{DynamicResource ThemeBorder}"
-                         CaretBrush="{DynamicResource PrimaryText}"
-                         KeyDown="PhraseEditBox_KeyDown"/>
+                <Border MinHeight="34" Padding="8,6" CornerRadius="6"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1">
+                    <TextBlock x:Name="PhraseEditDisplay" FontSize="13" TextWrapping="Wrap"
+                               VerticalAlignment="Center"/>
+                </Border>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
                     <Border Padding="10,6" CornerRadius="6" Cursor="Hand" Margin="0,0,8,0"
                             Background="{DynamicResource SurfaceBrush}"

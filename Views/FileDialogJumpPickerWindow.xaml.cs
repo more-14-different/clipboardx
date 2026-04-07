@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -319,6 +320,8 @@ public partial class FileDialogJumpPickerWindow : Window
             return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
         if (_suppressJumpHook)
             return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
+        if (KeyboardFocusIsExternalEditable())
+            return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
 
         var kb = Marshal.PtrToStructure<Win32.KBDLLHOOKSTRUCT>(lParam);
 
@@ -335,6 +338,45 @@ public partial class FileDialogJumpPickerWindow : Window
         return handled
             ? (IntPtr)1
             : Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// 前台线程焦点在「另存为」等系统对话框的文件名编辑框时，不把按键留给跳转列表，
+    /// 便于在保持跳转面板打开的同时修改文件名。
+    /// </summary>
+    private bool KeyboardFocusIsExternalEditable()
+    {
+        if (_hwnd == IntPtr.Zero) return false;
+        IntPtr fg = Win32.GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+        uint tid = Win32.GetWindowThreadProcessId(fg, out _);
+        var gti = new Win32.GUITHREADINFO { cbSize = Marshal.SizeOf<Win32.GUITHREADINFO>() };
+        if (!Win32.GetGUIThreadInfo(tid, ref gti) || gti.hwndFocus == IntPtr.Zero)
+            return false;
+        if (IsFocusWithinJumpPicker(gti.hwndFocus))
+            return false;
+        return IsEditableTextHwnd(gti.hwndFocus);
+    }
+
+    private bool IsFocusWithinJumpPicker(IntPtr hwndFocus)
+    {
+        for (IntPtr h = hwndFocus; h != IntPtr.Zero; h = Win32.GetParent(h))
+        {
+            if (h == _hwnd) return true;
+        }
+        return false;
+    }
+
+    private static bool IsEditableTextHwnd(IntPtr hwnd)
+    {
+        string cls = Win32.GetWindowClassName(hwnd);
+        if (string.IsNullOrEmpty(cls)) return false;
+        if (cls.Equals("Edit", StringComparison.OrdinalIgnoreCase))
+        {
+            uint style = unchecked((uint)Win32.GetWindowLongPtr(hwnd, Win32.GWL_STYLE).ToInt64());
+            return (style & Win32.ES_READONLY) == 0;
+        }
+        return cls.Contains("RichEdit", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>统一键盘逻辑：低级钩子同步调用；返回 true 表示已消费按键。</summary>

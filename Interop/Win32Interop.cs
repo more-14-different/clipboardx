@@ -23,6 +23,9 @@ internal static class Win32
     public const int WH_KEYBOARD_LL = 13;
     public const int WH_MOUSE_LL = 14;
     public const int WM_KEYDOWN = 0x0100;
+    public const int WM_KEYUP = 0x0101;
+    public const int WM_SYSKEYDOWN = 0x0104;
+    public const int WM_SYSKEYUP = 0x0105;
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_LBUTTONUP = 0x0202;
@@ -45,6 +48,11 @@ internal static class Win32
     public const uint VK_RETURN = 0x0D;
     public const uint VK_ESCAPE = 0x1B;
     public const uint VK_DELETE = 0x2E;
+    public const uint VK_SPACE = 0x20;
+    public const uint VK_PRIOR = 0x21;
+    public const uint VK_NEXT = 0x22;
+    public const uint VK_END = 0x23;
+    public const uint VK_HOME = 0x24;
     public const uint VK_OEM_3 = 0xC0;
     public const ushort VK_SHIFT = 0x10;
     public const ushort VK_INSERT = 0x2D;
@@ -197,6 +205,9 @@ internal static class Win32
             return new IntPtr(GetWindowLong32(hWnd, nIndex));
         return GetWindowLongPtr64(hWnd, nIndex);
     }
+
+    public const int GWL_STYLE = -16;
+    public const int ES_READONLY = 0x0800;
 
     [DllImport("user32.dll")]
     public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);

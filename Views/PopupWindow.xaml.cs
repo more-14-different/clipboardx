@@ -4,9 +4,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -63,6 +65,13 @@ public partial class PopupWindow : Window
     private EntryType? _typeFilter;
     private bool _quickPhraseOnly;
     private ClipboardEntry? _contextEntry;
+    /// <summary>已按下 Alt，等待 KeyUp：无组合键则打开右键菜单。</summary>
+    private bool _ctxAltAwaitRelease;
+    private bool _ctxAltComboDuringRelease;
+    /// <summary>右键菜单已打开时再次按下 Alt，松开时若无组合键则关闭菜单。</summary>
+    private bool _ctxAltCloseMenuArmed;
+    private readonly List<(Border Row, Action Activate)> _contextMenuNav = new();
+    private int _contextNavIndex;
     /// <summary>当前标为「待二次 Del 删除」的条目，与 <see cref="ClipboardEntry.IsPendingDelete"/> 同步。</summary>
     private ClipboardEntry? _pendingDeleteEntry;
 
@@ -73,7 +82,7 @@ public partial class PopupWindow : Window
     private uint _hotkeyKey;
     private int _maxItems;
     private string _popupPosition = "Caret";
-    private double _popupOpacity = 0.95;
+    private double _popupOpacity = 1.0;
     private bool _hideOnSameAppClick = true;
     private string _panelModifierKey = "Ctrl";
     private bool _isDragging;
@@ -346,6 +355,24 @@ public partial class PopupWindow : Window
     }
 
     private ClipboardEntry? _phraseEditEntry;
+    private string _phraseEditBuffer = "";
+    private const int PhraseEditMaxLen = 200;
+
+    private void RefreshPhraseEditDisplay()
+    {
+        if (string.IsNullOrEmpty(_phraseEditBuffer))
+        {
+            PhraseEditDisplay.Text = "在此输入…";
+            if (TryFindResource("MutedText") is System.Windows.Media.Brush mb)
+                PhraseEditDisplay.Foreground = mb;
+        }
+        else
+        {
+            PhraseEditDisplay.Text = _phraseEditBuffer;
+            if (TryFindResource("PrimaryText") is System.Windows.Media.Brush pb)
+                PhraseEditDisplay.Foreground = pb;
+        }
+    }
 
     private void AddQuickPaste(ClipboardEntry source)
     {
@@ -361,29 +388,19 @@ public partial class PopupWindow : Window
             ? source.TextContent[..60] + "…"
             : source.TextContent;
         PhrasePreview.Text = preview;
-        PhraseEditBox.Text = source.ShortcutPhrase ?? "";
+        _phraseEditBuffer = source.ShortcutPhrase ?? "";
+        RefreshPhraseEditDisplay();
         PhraseEditPopup.IsOpen = true;
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
-        {
-            var hwndSource = PresentationSource.FromVisual(PhraseEditBox) as System.Windows.Interop.HwndSource;
-            if (hwndSource != null)
-            {
-                Win32.SetForegroundWindow(hwndSource.Handle);
-                Win32.SetFocus(hwndSource.Handle);
-            }
-            PhraseEditBox.Focus();
-            Keyboard.Focus(PhraseEditBox);
-            PhraseEditBox.SelectAll();
-        });
     }
 
     private void CommitPhraseEdit()
     {
-        var phrase = PhraseEditBox.Text.Trim();
+        var phrase = _phraseEditBuffer.Trim();
         if (string.IsNullOrWhiteSpace(phrase) || _phraseEditEntry == null)
         {
             PhraseEditPopup.IsOpen = false;
             _phraseEditEntry = null;
+            _phraseEditBuffer = "";
             return;
         }
 
@@ -413,6 +430,7 @@ public partial class PopupWindow : Window
 
         PhraseEditPopup.IsOpen = false;
         _phraseEditEntry = null;
+        _phraseEditBuffer = "";
     }
 
     private void SaveQuickPastes()
@@ -428,12 +446,7 @@ public partial class PopupWindow : Window
     {
         PhraseEditPopup.IsOpen = false;
         _phraseEditEntry = null;
-    }
-
-    private void PhraseEditBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key == System.Windows.Input.Key.Enter) { CommitPhraseEdit(); e.Handled = true; }
-        else if (e.Key == System.Windows.Input.Key.Escape) { PhraseEditPopup.IsOpen = false; _phraseEditEntry = null; e.Handled = true; }
+        _phraseEditBuffer = "";
     }
 
     #endregion
@@ -724,6 +737,7 @@ public partial class PopupWindow : Window
     /// </param>
     private void RefreshFilter(int? preferSelectListIndex = null)
     {
+        CloseEntryPreviewBubble();
         ClearPendingDelete();
         _displayItems.Clear();
         _firstVisibleIndex = 0;
@@ -867,9 +881,12 @@ public partial class PopupWindow : Window
         _lockPopupWindowNomove = false;
         UninstallKeyboardHook();
         UninstallMouseHook();
-        ContextPopup.IsOpen = false;
+        CloseEntryPreviewBubble();
+        CloseContextMenuPopup();
+        ShortcutHelpPopup.IsOpen = false;
         PhraseEditPopup.IsOpen = false;
         _phraseEditEntry = null;
+        _phraseEditBuffer = "";
         ClearPendingDelete();
         Hide();
     }
@@ -2072,120 +2089,278 @@ public partial class PopupWindow : Window
         }
     }
 
+    private static bool IsMenuAltVk(uint vk) =>
+        vk == 0x12 || vk == 0xA4 || vk == 0xA5;
+
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && _isPopupVisible && wParam == (IntPtr)Win32.WM_KEYDOWN)
+        if (nCode < 0 || !_isPopupVisible)
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+        var msg = wParam.ToInt32();
+        var kb = Marshal.PtrToStructure<Win32.KBDLLHOOKSTRUCT>(lParam);
+        var isKeyDown = msg is Win32.WM_KEYDOWN or Win32.WM_SYSKEYDOWN;
+        var isKeyUp = msg is Win32.WM_KEYUP or Win32.WM_SYSKEYUP;
+
+        if (_activeFileJumpPicker != null)
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+        if (isKeyUp && IsMenuAltVk(kb.vkCode))
         {
-            if (_activeFileJumpPicker != null)
+            if (PhraseEditPopup.IsOpen)
                 return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
-            var kb = Marshal.PtrToStructure<Win32.KBDLLHOOKSTRUCT>(lParam);
-
-            if (PhraseEditPopup.IsOpen)
+            if (ContextPopup.IsOpen)
             {
-                if (kb.vkCode == Win32.VK_ESCAPE)
-                {
-                    Dispatcher.BeginInvoke(() => { PhraseEditPopup.IsOpen = false; _phraseEditEntry = null; });
-                    return (IntPtr)1;
-                }
-                if (kb.vkCode == Win32.VK_RETURN)
-                {
-                    Dispatcher.BeginInvoke(CommitPhraseEdit);
-                    return (IntPtr)1;
-                }
+                if (_ctxAltCloseMenuArmed && !_ctxAltComboDuringRelease)
+                    Dispatcher.BeginInvoke(CloseContextMenuPopup);
+                _ctxAltCloseMenuArmed = false;
+                _ctxAltAwaitRelease = false;
+                _ctxAltComboDuringRelease = false;
                 return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
             }
 
-            if (kb.vkCode is 0x10 or 0x11 or 0x12 or 0x14
-                or 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5
+            if (_ctxAltAwaitRelease && !_ctxAltComboDuringRelease)
+                Dispatcher.BeginInvoke(OpenContextMenuFromKeyboard);
+            _ctxAltAwaitRelease = false;
+            _ctxAltComboDuringRelease = false;
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
+
+        if (!isKeyDown)
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+        if (PhraseEditPopup.IsOpen)
+        {
+            if (kb.vkCode == Win32.VK_ESCAPE)
+            {
+                Dispatcher.BeginInvoke(() =>
+                {
+                    PhraseEditPopup.IsOpen = false;
+                    _phraseEditEntry = null;
+                    _phraseEditBuffer = "";
+                });
+                return (IntPtr)1;
+            }
+            if (kb.vkCode == Win32.VK_RETURN)
+            {
+                Dispatcher.BeginInvoke(CommitPhraseEdit);
+                return (IntPtr)1;
+            }
+
+            if (kb.vkCode is 0x10 or 0x11 or 0x14
+                or 0xA0 or 0xA1 or 0xA2 or 0xA3
                 or 0x5B or 0x5C)
                 return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
-            bool ctrlHeld = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
-            bool altHeld = (Win32.GetAsyncKeyState(0x12) & 0x8000) != 0;
+            bool phraseCtrlDown = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
+            bool phraseAltDown = ((Win32.GetAsyncKeyState(0x12) & 0x8000) != 0)
+                || ((Win32.GetAsyncKeyState(0xA4) & 0x8000) != 0)
+                || ((Win32.GetAsyncKeyState(0xA5) & 0x8000) != 0);
+            bool phraseWinDown = ((Win32.GetAsyncKeyState(0x5B) & 0x8000) != 0)
+                || ((Win32.GetAsyncKeyState(0x5C) & 0x8000) != 0);
+            if (phraseCtrlDown || phraseAltDown || phraseWinDown)
+                return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
-            if (IsPanelModifierDown())
+            if (kb.vkCode == Win32.VK_BACK)
             {
-                if (kb.vkCode >= 0x31 && kb.vkCode <= 0x39)
+                Dispatcher.BeginInvoke(() =>
                 {
-                    int idx = (int)(kb.vkCode - 0x30);
-                    Dispatcher.BeginInvoke(() => PasteByIndex(idx));
-                    return (IntPtr)1;
-                }
-                if (kb.vkCode == 0x09)
+                    if (_phraseEditBuffer.Length > 0)
+                        _phraseEditBuffer = _phraseEditBuffer[..^1];
+                    RefreshPhraseEditDisplay();
+                });
+                return (IntPtr)1;
+            }
+
+            if (kb.vkCode == 0x09)
+                return (IntPtr)1;
+
+            if (kb.vkCode == Win32.VK_SPACE)
+            {
+                Dispatcher.BeginInvoke(() =>
                 {
-                    Dispatcher.BeginInvoke(ToggleQuickPhraseFilter);
-                    return (IntPtr)1;
-                }
-                if (kb.vkCode == 0xBB)
+                    if (_phraseEditBuffer.Length < PhraseEditMaxLen)
+                        _phraseEditBuffer += " ";
+                    RefreshPhraseEditDisplay();
+                });
+                return (IntPtr)1;
+            }
+
+            if (kb.vkCode is Win32.VK_UP or Win32.VK_DOWN or Win32.VK_LEFT or Win32.VK_RIGHT
+                or Win32.VK_HOME or Win32.VK_END or Win32.VK_PRIOR or Win32.VK_NEXT
+                or Win32.VK_DELETE)
+                return (IntPtr)1;
+
+            var pch = VkToChar(kb.vkCode, kb.scanCode);
+            if (pch.HasValue && _phraseEditBuffer.Length < PhraseEditMaxLen)
+                Dispatcher.BeginInvoke(() =>
                 {
-                    Dispatcher.BeginInvoke(() => ScrollPage(1));
-                    return (IntPtr)1;
-                }
-                if (kb.vkCode == 0xBD)
-                {
-                    Dispatcher.BeginInvoke(() => ScrollPage(-1));
-                    return (IntPtr)1;
-                }
+                    _phraseEditBuffer += pch.Value;
+                    RefreshPhraseEditDisplay();
+                });
+            return (IntPtr)1;
+        }
+
+        if (ContextPopup.IsOpen)
+        {
+            if (IsMenuAltVk(kb.vkCode))
+            {
+                _ctxAltCloseMenuArmed = true;
+                _ctxAltComboDuringRelease = false;
                 return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
             }
 
-            if (ctrlHeld || altHeld)
-                return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            bool altPhy = ((Win32.GetAsyncKeyState(0x12) & 0x8000) != 0)
+                || ((Win32.GetAsyncKeyState(0xA4) & 0x8000) != 0)
+                || ((Win32.GetAsyncKeyState(0xA5) & 0x8000) != 0);
+            if (_ctxAltCloseMenuArmed && altPhy)
+                _ctxAltComboDuringRelease = true;
 
             switch (kb.vkCode)
             {
                 case Win32.VK_UP:
-                    Dispatcher.BeginInvoke(() => MoveSelection(-1));
+                    Dispatcher.BeginInvoke(() => MoveContextMenuHighlight(-1));
                     return (IntPtr)1;
                 case Win32.VK_DOWN:
-                    Dispatcher.BeginInvoke(() => MoveSelection(1));
-                    return (IntPtr)1;
-                case Win32.VK_LEFT:
-                    Dispatcher.BeginInvoke(() => ScrollPage(-1));
-                    return (IntPtr)1;
-                case Win32.VK_RIGHT:
-                    Dispatcher.BeginInvoke(() => ScrollPage(1));
+                    Dispatcher.BeginInvoke(() => MoveContextMenuHighlight(1));
                     return (IntPtr)1;
                 case Win32.VK_RETURN:
-                    Dispatcher.BeginInvoke(PasteSelectedItem);
+                    Dispatcher.BeginInvoke(ActivateContextMenuHighlight);
                     return (IntPtr)1;
                 case Win32.VK_ESCAPE:
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_pendingDeleteEntry != null)
-                        {
-                            ClearPendingDelete();
-                            return;
-                        }
-                        if (_searchText.Length > 0) { _searchText = ""; RefreshFilter(); }
-                        else HidePopup();
-                    });
+                    Dispatcher.BeginInvoke(CloseContextMenuPopup);
                     return (IntPtr)1;
-                case Win32.VK_BACK:
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_searchText.Length > 0) { _searchText = _searchText[..^1]; RefreshFilter(); }
-                    });
-                    return (IntPtr)1;
-                case 0x09: // Tab → cycle type filter
-                    Dispatcher.BeginInvoke(CycleTypeFilter);
-                    return (IntPtr)1;
-                case Win32.VK_DELETE:
-                    Dispatcher.BeginInvoke(DeleteSelectedItemWithConfirm);
+                default:
                     return (IntPtr)1;
             }
-
-            var ch = VkToChar(kb.vkCode, kb.scanCode);
-            if (ch.HasValue)
-            {
-                Dispatcher.BeginInvoke(() => { _searchText += ch.Value; RefreshFilter(); });
-            }
-
-            return (IntPtr)1;
         }
 
-        return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        if (IsMenuAltVk(kb.vkCode) && !PhraseEditPopup.IsOpen && !ContextPopup.IsOpen)
+        {
+            _ctxAltAwaitRelease = true;
+            _ctxAltComboDuringRelease = false;
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
+
+        if (_ctxAltAwaitRelease && !IsMenuAltVk(kb.vkCode))
+            _ctxAltComboDuringRelease = true;
+
+        if (kb.vkCode is 0x10 or 0x11 or 0x14
+            or 0xA0 or 0xA1 or 0xA2 or 0xA3
+            or 0x5B or 0x5C)
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+        bool ctrlHeld = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
+        bool altHeld = (Win32.GetAsyncKeyState(0x12) & 0x8000) != 0;
+
+        if (IsPanelModifierDown())
+        {
+            if (kb.vkCode >= 0x31 && kb.vkCode <= 0x39)
+            {
+                int idx = (int)(kb.vkCode - 0x30);
+                Dispatcher.BeginInvoke(() => PasteByIndex(idx));
+                return (IntPtr)1;
+            }
+            if (kb.vkCode == 0x09)
+            {
+                Dispatcher.BeginInvoke(ToggleQuickPhraseFilter);
+                return (IntPtr)1;
+            }
+            if (kb.vkCode == 0xBB)
+            {
+                Dispatcher.BeginInvoke(() => ScrollPage(1));
+                return (IntPtr)1;
+            }
+            if (kb.vkCode == 0xBD)
+            {
+                Dispatcher.BeginInvoke(() => ScrollPage(-1));
+                return (IntPtr)1;
+            }
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
+
+        if (ctrlHeld || altHeld)
+            return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+        switch (kb.vkCode)
+        {
+            case Win32.VK_SPACE:
+                Dispatcher.BeginInvoke(ToggleEntryPreviewBubble);
+                return (IntPtr)1;
+            case Win32.VK_UP:
+                Dispatcher.BeginInvoke(() => MoveSelection(-1));
+                return (IntPtr)1;
+            case Win32.VK_DOWN:
+                Dispatcher.BeginInvoke(() => MoveSelection(1));
+                return (IntPtr)1;
+            case Win32.VK_HOME:
+                Dispatcher.BeginInvoke(MoveSelectionToFirst);
+                return (IntPtr)1;
+            case Win32.VK_END:
+                Dispatcher.BeginInvoke(MoveSelectionToLast);
+                return (IntPtr)1;
+            case Win32.VK_PRIOR:
+                Dispatcher.BeginInvoke(() => ScrollPage(-1));
+                return (IntPtr)1;
+            case Win32.VK_NEXT:
+                Dispatcher.BeginInvoke(() => ScrollPage(1));
+                return (IntPtr)1;
+            case Win32.VK_LEFT:
+                Dispatcher.BeginInvoke(() => ScrollPage(-1));
+                return (IntPtr)1;
+            case Win32.VK_RIGHT:
+                Dispatcher.BeginInvoke(() => ScrollPage(1));
+                return (IntPtr)1;
+            case Win32.VK_RETURN:
+                Dispatcher.BeginInvoke(PasteSelectedItem);
+                return (IntPtr)1;
+            case Win32.VK_ESCAPE:
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (ContextPopup.IsOpen)
+                    {
+                        CloseContextMenuPopup();
+                        return;
+                    }
+                    if (ShortcutHelpPopup.IsOpen)
+                    {
+                        ShortcutHelpPopup.IsOpen = false;
+                        return;
+                    }
+                    if (EntryPreviewPopup.IsOpen)
+                    {
+                        CloseEntryPreviewBubble();
+                        return;
+                    }
+                    if (_pendingDeleteEntry != null)
+                    {
+                        ClearPendingDelete();
+                        return;
+                    }
+                    if (_searchText.Length > 0) { _searchText = ""; RefreshFilter(); }
+                    else HidePopup();
+                });
+                return (IntPtr)1;
+            case Win32.VK_BACK:
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (_searchText.Length > 0) { _searchText = _searchText[..^1]; RefreshFilter(); }
+                });
+                return (IntPtr)1;
+            case 0x09:
+                Dispatcher.BeginInvoke(CycleTypeFilter);
+                return (IntPtr)1;
+            case Win32.VK_DELETE:
+                Dispatcher.BeginInvoke(DeleteSelectedItemWithConfirm);
+                return (IntPtr)1;
+        }
+
+        var ch = VkToChar(kb.vkCode, kb.scanCode);
+        if (ch.HasValue)
+            Dispatcher.BeginInvoke(() => { _searchText += ch.Value; RefreshFilter(); });
+
+        return (IntPtr)1;
     }
 
     private bool IsPanelModifierDown()
@@ -2215,26 +2390,290 @@ public partial class PopupWindow : Window
     private void UpdateFooterHints()
     {
         string m = PanelModifierDisplayName;
-        FooterHints.Inlines.Clear();
         var hintBrush = FindResource("HintText") as System.Windows.Media.Brush;
+        var titleBrush = FindResource("PrimaryText") as System.Windows.Media.Brush;
+        var bodyBrush = FindResource("SecondaryText") as System.Windows.Media.Brush;
 
-        void AddHint(string key, string label, bool dot = true)
+        var lines = new List<(string Key, string Label)>
         {
-            if (dot) FooterHints.Inlines.Add(new System.Windows.Documents.Run(" · "));
+            ($"{m}+N", "快贴"),
+            ("↑↓", "选择"),
+            ("Home/End", "首尾"),
+            ("PgUp/Dn", "翻页"),
+            ("Enter", "粘贴"),
+            ($"{m}+Tab", "仅看快捷短语（再按切换）"),
+            ("Tab", "循环类型筛选"),
+            ("a-z", "拼音搜索"),
+        };
+#if CLIPX_CLIPBOARD
+        lines.Add(("Space/中键", "预览当前条目"));
+#endif
+        lines.Add(("Del×2", "连按两次删除当前条目"));
+        lines.Add(("Alt", "键盘打开右键菜单（↑↓ Enter）"));
+        lines.Add(("Esc", "关闭菜单、预览、取消删除线、清空搜索或关闭面板"));
+
+        FooterHints.Inlines.Clear();
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var (key, label) = lines[i];
+            if (i > 0) FooterHints.Inlines.Add(new System.Windows.Documents.Run(" · "));
             FooterHints.Inlines.Add(new System.Windows.Documents.Run(key) { Foreground = hintBrush });
-            FooterHints.Inlines.Add(new System.Windows.Documents.Run(label));
+            FooterHints.Inlines.Add(new System.Windows.Documents.Run(CompactFooterLabel(label)));
         }
 
-        AddHint($"{m}+N", "快贴", false);
-        AddHint("↑↓", "选择");
-        AddHint($"{m}±", "翻页");
-        AddHint("Enter", "粘贴");
-        AddHint($"{m}+Tab", "短语");
-        AddHint("Tab", "筛选");
-        AddHint("a-z", "拼音");
-        AddHint("Del×2", "删除");
-        AddHint("Esc", "取消删除线");
+        ShortcutHelpFullText.Inlines.Clear();
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("快捷键说明")
+            { FontWeight = FontWeights.SemiBold, Foreground = titleBrush, FontSize = 13 });
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        foreach (var (key, label) in lines)
+        {
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(key) { Foreground = hintBrush });
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("　"));
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(label) { Foreground = bodyBrush });
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        }
+
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(
+            $"与 {m} 同时按下时（在设置中可更换面板修饰键）：")
+            { Foreground = bodyBrush });
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        foreach (var (key, label) in new (string Key, string Label)[]
+        {
+            ("1～9", "粘贴列表第 1～9 条"),
+            ("Tab", "仅看快捷短语开/关"),
+            ("- / =", "列表向上 / 向下翻页"),
+        })
+        {
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run($"{m}+{key}") { Foreground = hintBrush });
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("　"));
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(label) { Foreground = bodyBrush });
+            ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        }
     }
+
+    /// <summary>底栏一行字数过多时用简短文案，完整说明见 more 气泡。</summary>
+    private static string CompactFooterLabel(string full) => full switch
+    {
+        "仅看快捷短语（再按切换）" => "短语",
+        "循环类型筛选" => "筛选",
+        "拼音搜索" => "拼音",
+        "预览当前条目" => "预览",
+        "连按两次删除当前条目" => "删除",
+        "键盘打开右键菜单（↑↓ Enter）" => "右键菜单",
+        "关闭菜单、预览、取消删除线、清空搜索或关闭面板" => "取消/关闭",
+        _ => full
+    };
+
+    private void ShortcutHelpMore_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        ShortcutHelpPopup.IsOpen = !ShortcutHelpPopup.IsOpen;
+    }
+
+    #region Entry preview bubble (Space)
+
+    private void CloseEntryPreviewBubble() => EntryPreviewPopup.IsOpen = false;
+
+    private void ToggleEntryPreviewBubble()
+    {
+        if (_displayItems.Count == 0) return;
+        if (ItemsList.SelectedItem is not ClipboardEntry) return;
+
+        if (EntryPreviewPopup.IsOpen)
+        {
+            CloseEntryPreviewBubble();
+            return;
+        }
+
+        ShowEntryPreviewBubble();
+    }
+
+    /// <summary>打开预览气泡（不关闭已打开的预览；用于中键切换条目时更新内容）。</summary>
+    private void ShowEntryPreviewBubble()
+    {
+        if (_displayItems.Count == 0) return;
+        if (ItemsList.SelectedItem is not ClipboardEntry entry) return;
+
+        UpdateEntryPreviewBubbleContent(entry);
+        EntryPreviewPopup.IsOpen = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (EntryPreviewPopup.IsOpen)
+                PositionEntryPreviewPopup();
+        });
+    }
+
+    private void PositionEntryPreviewPopup()
+    {
+        EntryPreviewPopup.PlacementTarget = MainBorder;
+
+        if (MainBorder.ActualWidth <= 0 || !IsVisible)
+        {
+            EntryPreviewPopup.Placement = PlacementMode.Right;
+            EntryPreviewPopup.HorizontalOffset = 10;
+            EntryPreviewPopup.VerticalOffset = 0;
+            return;
+        }
+
+        const double gap = 10;
+        const double previewNominalW = 548;
+        const double previewNominalH = 420;
+
+        try
+        {
+            EntryPreviewPopup.Child?.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        }
+        catch
+        {
+            /* ignore */
+        }
+
+        var desiredW = EntryPreviewPopup.Child is FrameworkElement fe && fe.DesiredSize.Width > 1
+            ? fe.DesiredSize.Width
+            : previewNominalW;
+
+        var topLeft = MainBorder.PointToScreen(new System.Windows.Point(0, 0));
+        double mbW = MainBorder.ActualWidth;
+        double mbH = MainBorder.ActualHeight;
+        double mainRightEdge = topLeft.X + mbW;
+        double mainLeftEdge = topLeft.X;
+
+        var wa = System.Windows.Forms.Screen.FromPoint(
+            new System.Drawing.Point(
+                (int)(topLeft.X + mbW / 2),
+                (int)(topLeft.Y + mbH / 2))).WorkingArea;
+
+        double spaceRight = wa.Right - mainRightEdge;
+        double spaceLeft = mainLeftEdge - wa.Left;
+        bool placeRight = spaceRight >= desiredW + gap || spaceRight >= spaceLeft;
+
+        if (placeRight)
+        {
+            EntryPreviewPopup.Placement = PlacementMode.Right;
+            EntryPreviewPopup.HorizontalOffset = gap;
+        }
+        else
+        {
+            EntryPreviewPopup.Placement = PlacementMode.Left;
+            EntryPreviewPopup.HorizontalOffset = -gap;
+        }
+
+        double verticalOffset = 0;
+        if (ItemsList.SelectedItem != null
+            && ItemsList.ItemContainerGenerator.ContainerFromItem(ItemsList.SelectedItem) is ListBoxItem item
+            && item.IsVisible)
+        {
+            var itemTop = item.PointToScreen(new System.Windows.Point(0, 0));
+            verticalOffset = itemTop.Y - topLeft.Y;
+        }
+
+        double minOff = wa.Top + 8 - topLeft.Y;
+        double maxOff = wa.Bottom - 8 - previewNominalH - topLeft.Y;
+        if (maxOff < minOff) maxOff = minOff;
+        verticalOffset = Math.Clamp(verticalOffset, minOff, maxOff);
+
+        EntryPreviewPopup.VerticalOffset = verticalOffset;
+    }
+
+    private void UpdateEntryPreviewBubbleContent(ClipboardEntry? entry = null)
+    {
+        entry ??= ItemsList.SelectedItem as ClipboardEntry;
+
+        EntryPreviewText.Visibility = Visibility.Collapsed;
+        EntryPreviewImage.Visibility = Visibility.Collapsed;
+        EntryPreviewImage.Source = null;
+        EntryPreviewText.Text = "";
+
+        if (entry == null) return;
+
+        if (entry.Type == EntryType.Text)
+        {
+            EntryPreviewText.Text = string.IsNullOrEmpty(entry.TextContent)
+                ? "（空文本）"
+                : entry.TextContent;
+            EntryPreviewText.Visibility = Visibility.Visible;
+            return;
+        }
+
+        if (entry.Type == EntryType.Image || entry.IsImageFile)
+        {
+            var bmp = LoadEntryPreviewBitmap(entry);
+            if (bmp != null)
+            {
+                EntryPreviewImage.Source = bmp;
+                EntryPreviewImage.Visibility = Visibility.Visible;
+                return;
+            }
+
+            EntryPreviewText.Text = entry.Type == EntryType.Image
+                ? "（无法解码该图片）"
+                : string.Join(Environment.NewLine, entry.FilePaths ?? Array.Empty<string>());
+            EntryPreviewText.Visibility = Visibility.Visible;
+            return;
+        }
+
+        EntryPreviewText.Text = entry.FilePaths is { Length: > 0 }
+            ? string.Join(Environment.NewLine, entry.FilePaths)
+            : "（无路径）";
+        EntryPreviewText.Visibility = Visibility.Visible;
+    }
+
+    private static BitmapSource? LoadEntryPreviewBitmap(ClipboardEntry entry)
+    {
+        try
+        {
+            if (entry.Type == EntryType.Image && entry.ImageData is { Length: > 0 } bytes)
+            {
+                using var ms = new MemoryStream(bytes);
+                var bi = new BitmapImage();
+                bi.BeginInit();
+                bi.StreamSource = ms;
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.DecodePixelWidth = 520;
+                bi.EndInit();
+                bi.Freeze();
+                return bi;
+            }
+
+            if (entry.IsImageFile && entry.FilePaths![0] is { } p && File.Exists(p))
+            {
+                var bi = new BitmapImage();
+                bi.BeginInit();
+                bi.UriSource = new Uri(Path.GetFullPath(p));
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.DecodePixelWidth = 520;
+                bi.EndInit();
+                bi.Freeze();
+                return bi;
+            }
+        }
+        catch
+        {
+            /* ignore */
+        }
+
+        return null;
+    }
+
+    private void SyncEntryPreviewWithSelection()
+    {
+        if (!EntryPreviewPopup.IsOpen) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (!EntryPreviewPopup.IsOpen) return;
+            if (ItemsList.SelectedItem is ClipboardEntry e)
+            {
+                UpdateEntryPreviewBubbleContent(e);
+                PositionEntryPreviewPopup();
+            }
+            else
+                CloseEntryPreviewBubble();
+        });
+    }
+
+    #endregion
 
     private static char? VkToChar(uint vkCode, uint scanCode)
     {
@@ -2256,6 +2695,20 @@ public partial class PopupWindow : Window
         if (idx < 0) idx = 0;
         if (idx >= _displayItems.Count) idx = _displayItems.Count - 1;
         ItemsList.SelectedIndex = idx;
+        ItemsList.ScrollIntoView(ItemsList.SelectedItem);
+    }
+
+    private void MoveSelectionToFirst()
+    {
+        if (_displayItems.Count == 0) return;
+        ItemsList.SelectedIndex = 0;
+        ItemsList.ScrollIntoView(ItemsList.SelectedItem);
+    }
+
+    private void MoveSelectionToLast()
+    {
+        if (_displayItems.Count == 0) return;
+        ItemsList.SelectedIndex = _displayItems.Count - 1;
         ItemsList.ScrollIntoView(ItemsList.SelectedItem);
     }
 
@@ -2580,6 +3033,76 @@ public partial class PopupWindow : Window
         Win32.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Win32.INPUT>());
     }
 
+    /// <summary>文本是否为严格 JSON（<see cref="JsonDocument"/> 可解析，不允许注释与尾逗号）。</summary>
+    private static bool IsWellFormedJson(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        try
+        {
+            using var _ = JsonDocument.Parse(
+                text,
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = false,
+                    CommentHandling = JsonCommentHandling.Disallow
+                });
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 将临时文件路径写入剪贴板文件列表并模拟粘贴，供资源管理器接收。
+    /// </summary>
+    private async Task CompletePasteTempFileToExplorerAsync(string path, string beginLogDetail, string setClipboardLogOp)
+    {
+        if (_targetWindow != IntPtr.Zero && !Win32.IsWindow(_targetWindow))
+            _targetWindow = IntPtr.Zero;
+
+        ClipboardDiagnosticsLog.Write(
+            $"pasteAsFile BEGIN {beginLogDetail} temp=\"{path}\" target=0x{_targetWindow.ToInt64():X}");
+
+        HidePopup();
+        if (_targetWindow != IntPtr.Zero)
+            Win32.SetForegroundWindowAggressive(_targetWindow);
+        await Task.Delay(85);
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        if (_hwnd != IntPtr.Zero)
+            Win32.TryEmptyClipboardAfterOpen(_hwnd);
+
+        _isSettingClipboard = true;
+        var fl = new StringCollection();
+        fl.Add(path);
+        bool clipboardOk = await TrySetClipboardAsync(
+            () => System.Windows.Clipboard.SetFileDropList(fl),
+            setClipboardLogOp,
+            clipNudgeHwnd: _hwnd);
+
+        ClipboardDiagnosticsLog.Write($"pasteAsFile END clipboardOk={clipboardOk}");
+
+        if (!clipboardOk)
+        {
+            _isSettingClipboard = false;
+            try { File.Delete(path); } catch { /* ignore */ }
+        }
+        else
+        {
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.SystemIdle, () => _isSettingClipboard = false);
+        }
+
+        if (clipboardOk)
+        {
+            await Task.Delay(60);
+            SendCtrlV();
+            await Task.Delay(600);
+            ClipboardDiagnosticsLog.Write("pasteAsFile post-echo suppression window elapsed");
+        }
+    }
+
     /// <summary>
     /// 将剪贴板图片历史写入临时 PNG 并放到系统剪贴板为文件列表，便于在资源管理器中 Ctrl+V 直接保存文件。
     /// </summary>
@@ -2615,48 +3138,55 @@ public partial class PopupWindow : Window
         }
         catch { return; }
 
-        if (_targetWindow != IntPtr.Zero && !Win32.IsWindow(_targetWindow))
-            _targetWindow = IntPtr.Zero;
-
-        ClipboardDiagnosticsLog.Write(
-            $"pasteAsFile BEGIN pngBytes={item.ImageData?.Length ?? 0} temp=\"{path}\" target=0x{_targetWindow.ToInt64():X}");
-
-        HidePopup();
-        if (_targetWindow != IntPtr.Zero)
-            Win32.SetForegroundWindowAggressive(_targetWindow);
-        await Task.Delay(85);
-        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
-
-        if (_hwnd != IntPtr.Zero)
-            Win32.TryEmptyClipboardAfterOpen(_hwnd);
-
-        _isSettingClipboard = true;
-        var fl = new StringCollection();
-        fl.Add(path);
-        bool clipboardOk = await TrySetClipboardAsync(
-            () => System.Windows.Clipboard.SetFileDropList(fl),
-            $"SetFileDropList explorer_temp file=\"{path}\"",
-            clipNudgeHwnd: _hwnd);
-
-        ClipboardDiagnosticsLog.Write($"pasteAsFile END clipboardOk={clipboardOk}");
-
-        if (!clipboardOk)
-        {
-            _isSettingClipboard = false;
-            try { File.Delete(path); } catch { /* ignore */ }
+        await CompletePasteTempFileToExplorerAsync(
+            path,
+            $"pngBytes={item.ImageData?.Length ?? 0}",
+            $"SetFileDropList explorer_temp_png file=\"{path}\"");
         }
-        else
+        finally
         {
-            _ = Dispatcher.BeginInvoke(DispatcherPriority.SystemIdle, () => _isSettingClipboard = false);
+            _pasteInProgress = false;
+        }
+    }
+
+    /// <summary>
+    /// 文本为合法 JSON 时写入临时 .json 文件并置于剪贴板文件列表，在资源管理器中粘贴即可落盘。
+    /// </summary>
+    private async void PasteJsonAsFileForExplorer()
+    {
+        if (ItemsList.SelectedItem is not ClipboardEntry item || item.Type != EntryType.Text) return;
+        var text = item.TextContent;
+        if (string.IsNullOrWhiteSpace(text) || !IsWellFormedJson(text)) return;
+
+        _pasteInProgress = true;
+        try
+        {
+        ClearPendingDelete();
+
+        if (!item.IsQuickPaste)
+        {
+            var idx = _allItems.IndexOf(item);
+            if (idx > 0) { _allItems.RemoveAt(idx); _allItems.Insert(0, item); }
+            item.TouchCopiedTime();
+            if (item.PersistedId is long pid)
+                _historyStore.TryUpdateCopiedAt(pid, item.CopiedAt);
         }
 
-        if (clipboardOk)
+        var dir = Path.Combine(Path.GetTempPath(), "ClipboardX");
+        try { Directory.CreateDirectory(dir); }
+        catch { return; }
+
+        var path = Path.Combine(dir, $"clip_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+        try
         {
-            await Task.Delay(60);
-            SendCtrlV();
-            await Task.Delay(600);
-            ClipboardDiagnosticsLog.Write("pasteAsFile post-echo suppression window elapsed");
+            File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         }
+        catch { return; }
+
+        await CompletePasteTempFileToExplorerAsync(
+            path,
+            $"jsonChars={text.Length}",
+            $"SetFileDropList explorer_temp_json file=\"{path}\"");
         }
         finally
         {
@@ -2680,6 +3210,7 @@ public partial class PopupWindow : Window
         if (ItemsList.SelectedItem is ClipboardEntry sel && ReferenceEquals(sel, _pendingDeleteEntry))
             return;
         ClearPendingDelete();
+        SyncEntryPreviewWithSelection();
     }
 
     private void ItemsList_ScrollChanged(object sender, ScrollChangedEventArgs e)
@@ -2694,13 +3225,25 @@ public partial class PopupWindow : Window
         int newFirstVisible = Math.Max(0, (int)(sv.VerticalOffset / itemHeight));
         if (newFirstVisible == _firstVisibleIndex) return;
 
-        int relSelection = Math.Max(0, ItemsList.SelectedIndex - _firstVisibleIndex);
+        // 仅同步「当前首行」与快速粘贴序号显示。勿在此处改写 SelectedIndex：
+        // ↓ 键 + ScrollIntoView 会先更新选中再滚动，若按「旧首行 + 新选中」推算 relSelection，
+        // 会把选中项错误推到 newFirstVisible + relSelection（例如从末行再下移一条时被甩到更下方）。
         _firstVisibleIndex = newFirstVisible;
-
-        int newSel = Math.Clamp(newFirstVisible + relSelection, 0, _displayItems.Count - 1);
-        ItemsList.SelectedIndex = newSel;
-
         UpdateVisibleIndices(newFirstVisible);
+    }
+
+    private void ItemsList_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        var element = e.OriginalSource as DependencyObject;
+        while (element != null && element is not ListBoxItem)
+            element = VisualTreeHelper.GetParent(element);
+        if (element is not ListBoxItem lbi || lbi.DataContext is not ClipboardEntry entry) return;
+
+        ItemsList.SelectedItem = entry;
+        ItemsList.ScrollIntoView(entry);
+        ShowEntryPreviewBubble();
+        e.Handled = true;
     }
 
     private void ItemsList_PreviewMouseUp(object sender, MouseButtonEventArgs e)
@@ -2722,26 +3265,124 @@ public partial class PopupWindow : Window
             element = VisualTreeHelper.GetParent(element);
         if (element is ListBoxItem lbi && lbi.DataContext is ClipboardEntry entry)
         {
-            _contextEntry = entry;
-            ItemsList.SelectedItem = entry;
-            CtxShortcutText.Text = entry.IsQuickPaste ? "⚡ 修改快捷短语" : "⚡ 设为快捷短语";
-            CtxPasteAsFileBorder.Visibility = entry.Type == EntryType.Image
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            SyncContextMenuForEntry(entry);
+            ContextPopup.Placement = PlacementMode.Mouse;
+            ContextPopup.PlacementTarget = null;
+            _ctxAltCloseMenuArmed = false;
             ContextPopup.IsOpen = true;
+            RebuildContextMenuNav();
+            _contextNavIndex = 0;
+            ApplyContextMenuHighlight();
             e.Handled = true;
         }
     }
 
-    private void CtxPaste_Click(object sender, MouseButtonEventArgs e)
+    private void SyncContextMenuForEntry(ClipboardEntry entry)
     {
-        ContextPopup.IsOpen = false;
-        if (_contextEntry != null) { ItemsList.SelectedItem = _contextEntry; PasteSelectedItem(); }
+        _contextEntry = entry;
+        ItemsList.SelectedItem = entry;
+        CtxShortcutText.Text = entry.IsQuickPaste ? "⚡ 修改快捷短语" : "⚡ 设为快捷短语";
+        CtxPasteAsFileBorder.Visibility = entry.Type == EntryType.Image
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        CtxPasteJsonFileBorder.Visibility = entry.Type == EntryType.Text && IsWellFormedJson(entry.TextContent)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
-    private void CtxPasteAsFile_Click(object sender, MouseButtonEventArgs e)
+    private void OpenContextMenuFromKeyboard()
     {
+        if (_displayItems.Count == 0) return;
+        if (ItemsList.SelectedItem is not ClipboardEntry entry) return;
+
+        SyncContextMenuForEntry(entry);
+        RebuildContextMenuNav();
+        if (_contextMenuNav.Count == 0) return;
+
+        _contextNavIndex = 0;
+        if (ItemsList.ItemContainerGenerator.ContainerFromItem(entry) is ListBoxItem li)
+        {
+            ContextPopup.PlacementTarget = li;
+            ContextPopup.Placement = PlacementMode.Right;
+            ContextPopup.HorizontalOffset = 8;
+            ContextPopup.VerticalOffset = 0;
+        }
+        else
+        {
+            ContextPopup.PlacementTarget = MainBorder;
+            ContextPopup.Placement = PlacementMode.Center;
+            ContextPopup.HorizontalOffset = 0;
+            ContextPopup.VerticalOffset = 0;
+        }
+
+        _ctxAltCloseMenuArmed = false;
+        ContextPopup.IsOpen = true;
+        ApplyContextMenuHighlight();
+    }
+
+    private void RebuildContextMenuNav()
+    {
+        _contextMenuNav.Clear();
+        void Add(Border b, Action a)
+        {
+            if (b.Visibility == Visibility.Visible)
+                _contextMenuNav.Add((b, a));
+        }
+
+        Add(CtxPasteBorder, ActivateCtxPaste);
+        Add(CtxPasteAsFileBorder, ActivateCtxPasteAsFile);
+        Add(CtxPasteJsonFileBorder, ActivateCtxPasteJsonFile);
+        Add(CtxShortcutBorder, ActivateCtxShortcut);
+        Add(CtxDeleteBorder, ActivateCtxDelete);
+    }
+
+    private void ApplyContextMenuHighlight()
+    {
+        var hi = FindResource("SelectedBrush") as Brush ?? System.Windows.Media.Brushes.LightGray;
+        for (int i = 0; i < _contextMenuNav.Count; i++)
+        {
+            var row = _contextMenuNav[i].Row;
+            row.Background = i == _contextNavIndex ? hi : System.Windows.Media.Brushes.Transparent;
+        }
+    }
+
+    private void MoveContextMenuHighlight(int delta)
+    {
+        if (_contextMenuNav.Count == 0) return;
+        _contextNavIndex = (_contextNavIndex + delta + _contextMenuNav.Count) % _contextMenuNav.Count;
+        ApplyContextMenuHighlight();
+    }
+
+    private void ActivateContextMenuHighlight()
+    {
+        if (_contextMenuNav.Count == 0) return;
+        if (_contextNavIndex < 0 || _contextNavIndex >= _contextMenuNav.Count) return;
+        _contextMenuNav[_contextNavIndex].Activate();
+    }
+
+    private void CloseContextMenuPopup()
+    {
+        foreach (var (row, _) in _contextMenuNav)
+            row.ClearValue(Border.BackgroundProperty);
+        _contextMenuNav.Clear();
+        _contextNavIndex = 0;
         ContextPopup.IsOpen = false;
+        _ctxAltCloseMenuArmed = false;
+    }
+
+    private void ActivateCtxPaste()
+    {
+        CloseContextMenuPopup();
+        if (_contextEntry != null)
+        {
+            ItemsList.SelectedItem = _contextEntry;
+            PasteSelectedItem();
+        }
+    }
+
+    private void ActivateCtxPasteAsFile()
+    {
+        CloseContextMenuPopup();
         if (_contextEntry is { Type: EntryType.Image })
         {
             ItemsList.SelectedItem = _contextEntry;
@@ -2749,18 +3390,40 @@ public partial class PopupWindow : Window
         }
     }
 
-    private void CtxShortcut_Click(object sender, MouseButtonEventArgs e)
+    private void ActivateCtxPasteJsonFile()
     {
-        ContextPopup.IsOpen = false;
-        if (_contextEntry != null) AddQuickPaste(_contextEntry);
+        CloseContextMenuPopup();
+        if (_contextEntry is { Type: EntryType.Text } && IsWellFormedJson(_contextEntry.TextContent))
+        {
+            ItemsList.SelectedItem = _contextEntry;
+            PasteJsonAsFileForExplorer();
+        }
     }
 
-    private void CtxDelete_Click(object sender, MouseButtonEventArgs e)
+    private void ActivateCtxShortcut()
     {
-        ContextPopup.IsOpen = false;
-        if (_contextEntry == null) return;
-        RemoveEntry(_contextEntry);
+        CloseContextMenuPopup();
+        if (_contextEntry != null)
+            AddQuickPaste(_contextEntry);
     }
+
+    private void ActivateCtxDelete()
+    {
+        var del = _contextEntry;
+        CloseContextMenuPopup();
+        if (del != null)
+            RemoveEntry(del);
+    }
+
+    private void CtxPaste_Click(object sender, MouseButtonEventArgs e) => ActivateCtxPaste();
+
+    private void CtxPasteAsFile_Click(object sender, MouseButtonEventArgs e) => ActivateCtxPasteAsFile();
+
+    private void CtxPasteJsonFile_Click(object sender, MouseButtonEventArgs e) => ActivateCtxPasteJsonFile();
+
+    private void CtxShortcut_Click(object sender, MouseButtonEventArgs e) => ActivateCtxShortcut();
+
+    private void CtxDelete_Click(object sender, MouseButtonEventArgs e) => ActivateCtxDelete();
 
     private void RemoveEntry(ClipboardEntry entry)
     {

@@ -90,6 +90,68 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 仅纵向滚动条美化为圆角细条；横向仍用系统默认（避免误伤横向滚动条布局） -->
+        <Style TargetType="ScrollBar">
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Vertical">
+                    <Setter Property="OverridesDefaultStyle" Value="True" />
+                    <Setter Property="Width" Value="11" />
+                    <Setter Property="MinWidth" Value="11" />
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid x:Name="Root" Background="Transparent" SnapsToDevicePixels="True">
+                                    <Border x:Name="TrackPad"
+                                            Width="7"
+                                            HorizontalAlignment="Center"
+                                            Background="{DynamicResource ScrollBarTrackBrush}"
+                                            CornerRadius="4"
+                                            Margin="0,8" />
+                                    <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                        <Track.DecreaseRepeatButton>
+                                            <RepeatButton Command="{x:Static ScrollBar.LineUpCommand}"
+                                                          Opacity="0" Focusable="False" Height="1" />
+                                        </Track.DecreaseRepeatButton>
+                                        <Track.Thumb>
+                                            <Thumb>
+                                                <Thumb.Template>
+                                                    <ControlTemplate TargetType="Thumb">
+                                                        <Border x:Name="ThumbBorder"
+                                                                Width="7"
+                                                                HorizontalAlignment="Center"
+                                                                Background="{DynamicResource ScrollBarThumbBrush}"
+                                                                CornerRadius="4"
+                                                                Margin="0,2" />
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="ThumbBorder"
+                                                                        Property="Background"
+                                                                        Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                                            </Trigger>
+                                                            <Trigger Property="IsDragging" Value="True">
+                                                                <Setter TargetName="ThumbBorder"
+                                                                        Property="Background"
+                                                                        Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Thumb.Template>
+                                            </Thumb>
+                                        </Track.Thumb>
+                                        <Track.IncreaseRepeatButton>
+                                            <RepeatButton Command="{x:Static ScrollBar.LineDownCommand}"
+                                                          Opacity="0" Focusable="False" Height="1" />
+                                        </Track.IncreaseRepeatButton>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -193,15 +255,15 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <TextBlock Grid.Row="12" Grid.Column="0" Text="透明度"
+                        <TextBlock Grid.Row="12" Grid.Column="0" Text="不透明度"
                                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
                         <StackPanel Grid.Row="12" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                             <Slider x:Name="OpacitySlider" Width="100" Minimum="0.4" Maximum="1.0"
-                                    Value="0.95" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                    Value="1.0" TickFrequency="0.05" IsSnapToTickEnabled="True"
                                     VerticalAlignment="Center"
                                     ValueChanged="OpacitySlider_ValueChanged" />
                             <TextBlock x:Name="OpacityValueText" Foreground="{DynamicResource SecondaryText}"
-                                       FontSize="13" VerticalAlignment="Center" Width="36" TextAlignment="Right" Margin="6,0,0,0" />
+                                       FontSize="13" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Margin="6,0,0,0" />
                         </StackPanel>
 
                         <TextBlock Grid.Row="14" Grid.Column="0" Text="预览行数"
@@ -279,7 +341,7 @@
                         <Setter Property="FontWeight" Value="SemiBold" />
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderThickness" Value="0" />
-                        <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+                        <Setter Property="Foreground" Value="{DynamicResource AccentBg}" />
                         <Setter Property="Cursor" Value="Hand" />
                         <Setter Property="Focusable" Value="False" />
                         <Setter Property="ToolTipService.InitialShowDelay" Value="0" />
@@ -368,8 +430,8 @@
                         <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,4">
                             <TextBlock Text="打开/保存 对话框跳转" FontSize="18" FontWeight="SemiBold"
                                        Foreground="{DynamicResource PrimaryText}" />
-                            <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.72" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource PrimaryText}"
+                            <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.88" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SecondaryText}"
                                        Text="提示：鼠标悬停在「?」、标签文字或右侧开关上可立即查看说明，移开即关闭。" />
                         </StackPanel>
 
