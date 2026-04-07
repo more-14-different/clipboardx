@@ -23,7 +23,7 @@
    - **`ClipboardX-*-setup-self-contained.exe`** — **Inno（完整版·自包含）**：体积较大，**无需**单独装 .NET，与自包含 zip 等价但带安装向导、开始菜单与卸载项。
    - **`ClipboardX-*-win-x64-no-runtime.zip`** — 解压即用，需已安装上述桌面运行时
    - **`ClipboardX-*-win-x64-self-contained.zip`** — 自带运行时，无需单独装 .NET
-2. 若用 zip：解压后运行 **`ClipboardX.exe`**。从临时目录启动时，程序会复制到 `%LocalAppData%\Programs\ClipboardX` 并可在「应用和功能」中卸载；托盘 **关于** 可查看版本与主页。
+2. 若用 zip：解压到**固定目录**后运行 **`ClipboardX.exe`**（剪裁版为 `ClipboardX-clipboard.exe` / `ClipboardX-filejump.exe`）。配置与历史默认写在 **exe 同级 `Data\`**（绿色便携，可随文件夹备份或带走）。若希望装进用户目录并在「应用和功能」中卸载，可在托盘选 **「安装到当前用户…」**（非自动）；托盘 **关于** 可查看版本与主页。
 3. **检查更新**：托盘右键 → **检查更新…**，从 GitHub Releases 按**当前程序名（完整版 / 剪裁版）**匹配对应 zip，并按本机是否使用共享运行时优选 **no-runtime** 或 **self-contained**；关闭程序后覆盖并重启。需可访问 GitHub（含 `api.github.com`）。**设置 → 剪贴板 → 启动时检查更新**（默认开）会在启动约 45 秒后静默查询；若有新版仅**托盘气泡**提示，同一发行版只提示一次，仍须手动「检查更新…」下载安装。
 
 ### SmartScreen「Windows 已保护你的电脑」
@@ -163,7 +163,9 @@
 
 ## 数据与日志
 
-**默认（解压即用）**：数据根目录为 **`exe\Data\`**。若通过托盘 **「安装到当前用户…」** 安装并自 **`%LocalAppData%\Programs\ClipboardX\`** 下主程序启动，则与同目录策略一致地改用 **`%LocalAppData%\ClipboardX\`**（多 Flavor 为 `ClipboardX-clipboard`、`ClipboardX-filejump`）。托盘菜单：未安装时显示 **安装**，已安装时显示 **卸载**；不再依赖 `ClipboardX.portable` 文件。
+**默认（解压即用）**：数据根目录为 **`exe\Data\`**（`exe` 指**你实际启动的主程序路径**所在目录）。**单文件 zip**（`PublishSingleFile`）在运行时仍会把内嵌程序集解压到 `%TEMP%\.net\…`，但 **v1.2.8 起** 用户配置、SQLite 与日志**不会**再误写进该临时目录，避免因清理 Temp 丢失数据；首次升级时若曾在旧版 Temp 目录下生成过 `Data`，会在启动时**尽量合并**到 exe 旁的 `Data\`（若 Temp 已清空则无法找回）。
+
+若通过托盘 **「安装到当前用户…」** 安装并自 **`%LocalAppData%\Programs\ClipboardX\`** 下主程序启动，则数据根改用 **`%LocalAppData%\ClipboardX\`**（多 Flavor 为 `ClipboardX-clipboard`、`ClipboardX-filejump`）。托盘菜单：未安装时显示 **安装**，已安装时显示 **卸载**；不再依赖 `ClipboardX.portable` 文件。
 
 | 位置 | 说明 |
 |------|------|
@@ -172,7 +174,7 @@
 | `Data\clipboard_history.db`（…） | SQLite：**剪贴板历史**正文（WAL 模式） |
 | `Data\shell_navigate.log`（…） | **Shell 注入**与相关跳转诊断（UTF-8） |
 
-**迁移**：在 **安装布局**（`%LocalAppData%\ClipboardX\` 数据根）下，若曾使用 **`%AppData%\ClipboardX`** 或 **`%AppData%\ClipboardManager`**，首次启动会在目标文件不存在时尝试复制到当前数据根（详见 `AppPaths.MigrateLegacyPaths`）。从解压目录执行 **安装到当前用户** 时，会将 **`exe\Data\`** 中尚不存在于目标目录的文件复制过去，减少配置与历史丢失。
+**迁移**：在 **安装布局**（`%LocalAppData%\ClipboardX\` 数据根）下，若曾使用 **`%AppData%\ClipboardX`** 或 **`%AppData%\ClipboardManager`**，首次启动会在目标文件不存在时尝试复制到当前数据根（详见 `AppPaths.MigrateLegacyPaths`）。**便携 / 单文件**：v1.2.8 起会把误写在单文件解压目录下的旧 **`Data\`** 合并到正确路径（exe 旁）。从解压目录执行 **安装到当前用户** 时，会将 **`exe\Data\`** 中尚不存在于目标目录的文件复制过去，减少配置与历史丢失。
 
 **多 Flavor**：见上表与目录名；安装目录仍以 **`Programs\ClipboardX\`** 下的对应 **主 exe 文件名** 为准。
 
@@ -225,7 +227,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ```powershell
 # 在仓库根目录执行
-$v = "1.2.7"   # 与 csproj 同步后改这里
+$v = "1.2.8"   # 与 csproj 同步后改这里
 Set-ExecutionPolicy -Scope Process -Bypass -Force
 .\native\ShellNavigate\build.ps1
 
@@ -263,7 +265,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
   -p:IncludeAllContentForSelfExtract=true -o ./out/jump
 ```
 
-单文件会把内嵌 DLL 解压到临时目录；运行时通过 `AppContext.BaseDirectory` 加载 **`ClipboardXShellNavigate*.dll`**。推送 **`v*`** 标签后，CI 会为 **Full / ClipboardOnly / FileJumpOnly** 各产出 **no-runtime** 与 **self-contained** zip，完整版另含 **两种 Inno 安装包**（`setup` 与 `setup-self-contained`，见上文「下载与安装」）。
+单文件会把内嵌 DLL 解压到临时目录；运行时通过 `AppContext.BaseDirectory` 解析并加载 **`ClipboardXShellNavigate*.dll`**（与**用户数据根** `exe\Data\` 的路径规则无关，见上文「数据与日志」）。推送 **`v*`** 标签后，CI 会为 **Full / ClipboardOnly / FileJumpOnly** 各产出 **no-runtime** 与 **self-contained** zip，完整版另含 **两种 Inno 安装包**（`setup` 与 `setup-self-contained`，见上文「下载与安装」）。
 
 ## 环境与要求
 
@@ -285,6 +287,11 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 完整历史见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**，以下摘录主要变更。
+
+### v1.2.8
+
+- **单文件 / 绿色 zip**：便携模式数据根改为 **`Environment.ProcessPath` 所在目录下的 `Data\`**，不再误用 `%TEMP%\.net\…` 单文件解压目录，避免清理 Temp 丢失设置与剪贴板历史；首次启动可合并旧版误写在 Temp 下的 `Data`（前提是该目录仍在）
+- **安装**：「安装到当前用户…」在框架依赖多文件发布时，按当前主 exe 名检测主 DLL（如 `ClipboardX-clipboard.dll`），剪裁版整机复制不再漏文件
 
 ### v1.2.7
 

@@ -326,8 +326,9 @@ public static class PerUserInstall
             var source = Environment.ProcessPath!;
             var sourceDir = Path.GetDirectoryName(source)!;
 
-            // 框架依赖：apphost 旁有 ClipboardX.dll，需整套复制；单文件发布仅有大 exe 则无此文件
-            if (File.Exists(Path.Combine(sourceDir, "ClipboardX.dll")))
+            // 框架依赖：apphost 旁有主 dll，需整套复制；单文件发布仅有大 exe 则无此文件
+            var mainDll = Path.ChangeExtension(AppInfo.PrimaryExecutableFileName, ".dll");
+            if (File.Exists(Path.Combine(sourceDir, mainDll)))
                 CopyFrameworkDeploymentFiles(sourceDir, InstallDirectory);
             else
                 File.Copy(source, InstalledExecutablePath, overwrite: true);

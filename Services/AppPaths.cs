@@ -52,7 +52,7 @@ internal static class AppPaths
     public static string LegacyClipboardManagerDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClipboardManager");
 
-    /// <summary>获取 exe 所在目录。</summary>
+    /// <summary>获取主程序集 / 宿主解析出的目录（单文件下多为 %TEMP%\.net\… 解压目录，不宜存放持久化数据）。</summary>
     private static string GetExeDirectory()
     {
         var loc = typeof(AppPaths).Assembly.Location;
@@ -64,14 +64,66 @@ internal static class AppPaths
         return AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
+    /// <summary>
+    /// 便携模式下 <c>Data\</c> 应位于用户启动的 exe 旁。单文件发布时 <see cref="AppContext.BaseDirectory"/> 指向临时解压目录，
+    /// 若仍用 <see cref="GetExeDirectory"/> 会把配置与历史写入 Temp，清理后即丢失。
+    /// </summary>
+    private static string GetPortableDataHostDirectory()
+    {
+        var processPath = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(processPath) &&
+            processPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+            !processPath.EndsWith("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(processPath);
+                if (!string.IsNullOrEmpty(dir))
+                    return dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                // 回退 GetExeDirectory
+            }
+        }
+
+        return GetExeDirectory();
+    }
+
+    /// <summary>将旧版单文件误写在解压目录下的 Data 合并到新的 exe 旁 Data（仅缺省则复制）。</summary>
+    private static void TryMigrateLegacySingleFileExtractData(string newDataRoot)
+    {
+        try
+        {
+            var legacyData = Path.Combine(GetExeDirectory(), "Data");
+            if (string.Equals(
+                    Path.GetFullPath(legacyData),
+                    Path.GetFullPath(newDataRoot),
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+            if (!Directory.Exists(legacyData)) return;
+
+            Directory.CreateDirectory(newDataRoot);
+            foreach (var path in Directory.EnumerateFiles(legacyData))
+            {
+                var name = Path.GetFileName(path);
+                var dest = Path.Combine(newDataRoot, name);
+                if (!File.Exists(dest))
+                    File.Copy(path, dest, overwrite: false);
+            }
+        }
+        catch
+        {
+            /* 迁移失败不阻断启动 */
+        }
+    }
+
     /// <summary>在 App.OnStartup 最早期调用。根据是否从安装目录启动确定 DataRoot；安装布局下执行旧路径迁移。</summary>
     /// <param name="runningFromPerUserInstall">
     /// 为 true 时表示当前进程路径等于按用户安装目录中的主程序（%LocalAppData%\Programs\ClipboardX\*.exe）。
     /// </param>
     public static void Initialize(bool runningFromPerUserInstall)
     {
-        var exeDir = GetExeDirectory();
-
         if (runningFromPerUserInstall)
         {
             _isPortable = false;
@@ -82,7 +134,9 @@ internal static class AppPaths
         else
         {
             _isPortable = true;
-            _dataRoot = Path.Combine(exeDir, "Data");
+            var hostDir = GetPortableDataHostDirectory();
+            _dataRoot = Path.Combine(hostDir, "Data");
+            TryMigrateLegacySingleFileExtractData(_dataRoot);
         }
 
         Directory.CreateDirectory(_dataRoot);
