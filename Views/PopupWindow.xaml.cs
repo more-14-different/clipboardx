@@ -1348,7 +1348,7 @@ public partial class PopupWindow : Window
             _ = PasteMultipleSelectedInOrderAsync(newlineAfterEachTextWhenCtrlEnter: ctrlHeldWithEnter);
             return;
         }
-        if (_batchQueue.Count > 0)
+        if (GetBatchMode() != BatchPasteQueueMode.Off && _batchQueue.Count > 0)
         {
             _ = PasteBatchQueueHeadAsync();
             return;
@@ -1370,7 +1370,20 @@ public partial class PopupWindow : Window
         UpdateBatchOrderProperties();
         ReorderAllItemsQueueFirst();
         RefreshFilter(0);
-        await PasteEntryAsync(item, hidePopupAfter: true);
+        try
+        {
+            await PasteEntryAsync(item, hidePopupAfter: true);
+        }
+        catch (Exception ex)
+        {
+            // 恢复队列以防粘贴失败
+            _batchQueue.Insert(0, item);
+            UpdateBatchOrderProperties();
+            ReorderAllItemsQueueFirst();
+            RefreshFilter(0);
+            ClipboardDiagnosticsLog.Write($"PasteBatchQueueHeadAsync failed, restored queue: {ex.Message}");
+            return;
+        }
 #if CLIPX_CLIPBOARD
         SyncBatchPasteKeyboardHook();
         if (_batchQueue.Count > 0)
