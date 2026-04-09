@@ -727,7 +727,11 @@ public partial class PopupWindow : Window
             _historyStore.TryDelete(x.PersistedId);
         _allItems.RemoveAll(x => x.Type == EntryType.Text && !x.IsQuickPaste && x.TextContent == text);
         // 一次复制常连发多条 WM_CLIPBOARDUPDATE；旧条已从列表移除，若不清理队列会叠多条同内容角标
-        _batchQueue.RemoveAll(x => x.Type == EntryType.Text && !x.IsQuickPaste && x.TextContent == text);
+        var removedFromQ = _batchQueue.RemoveAll(x => x.Type == EntryType.Text && !x.IsQuickPaste && x.TextContent == text);
+#if CLIPX_CLIPBOARD
+        if (removedFromQ > 0)
+            RequestBatchQueueHeadClipboardResyncAfterDedup();
+#endif
     }
 
     private void DeduplicateFiles(string[] paths)
@@ -736,7 +740,11 @@ public partial class PopupWindow : Window
         foreach (var x in _allItems.Where(x => x.Type == EntryType.Files && string.Join("|", x.FilePaths ?? []) == key))
             _historyStore.TryDelete(x.PersistedId);
         _allItems.RemoveAll(x => x.Type == EntryType.Files && string.Join("|", x.FilePaths ?? []) == key);
-        _batchQueue.RemoveAll(x => x.Type == EntryType.Files && string.Join("|", x.FilePaths ?? []) == key);
+        var removedFromQ = _batchQueue.RemoveAll(x => x.Type == EntryType.Files && string.Join("|", x.FilePaths ?? []) == key);
+#if CLIPX_CLIPBOARD
+        if (removedFromQ > 0)
+            RequestBatchQueueHeadClipboardResyncAfterDedup();
+#endif
     }
 
     /// <summary>按 PNG 字节 MD5 去掉已有相同图片（含本程序粘贴触发的重复监控写入）。</summary>
@@ -748,20 +756,36 @@ public partial class PopupWindow : Window
         foreach (var x in _allItems.Where(x => x.Type == EntryType.Image && !x.IsQuickPaste && x.ImageContentMd5Hex == hex))
             _historyStore.TryDelete(x.PersistedId);
         _allItems.RemoveAll(x => x.Type == EntryType.Image && !x.IsQuickPaste && x.ImageContentMd5Hex == hex);
-        _batchQueue.RemoveAll(x => x.Type == EntryType.Image && !x.IsQuickPaste && x.ImageContentMd5Hex == hex);
+        var removedFromQ = _batchQueue.RemoveAll(x => x.Type == EntryType.Image && !x.IsQuickPaste && x.ImageContentMd5Hex == hex);
+#if CLIPX_CLIPBOARD
+        if (removedFromQ > 0)
+            RequestBatchQueueHeadClipboardResyncAfterDedup();
+#endif
     }
 
     private void TrimItems()
     {
         var regular = _allItems.Where(x => !x.IsQuickPaste).ToList();
+#if CLIPX_CLIPBOARD
+        var queueTouched = false;
+#endif
         while (regular.Count > _maxItems)
         {
             var last = regular[^1];
             _historyStore.TryDelete(last.PersistedId);
             _allItems.Remove(last);
+#if CLIPX_CLIPBOARD
+            if (_batchQueue.Remove(last))
+                queueTouched = true;
+#else
             _batchQueue.Remove(last);
+#endif
             regular.RemoveAt(regular.Count - 1);
         }
+#if CLIPX_CLIPBOARD
+        if (queueTouched)
+            RequestBatchQueueHeadClipboardResyncAfterDedup();
+#endif
     }
 
     #endregion
@@ -1041,6 +1065,7 @@ public partial class PopupWindow : Window
             .ToList();
         if (ordered.Count == 0) return;
 
+        var headBefore = _batchQueue.Count > 0 ? _batchQueue[0] : null;
         foreach (var e in ordered)
         {
             _batchQueue.Remove(e);
@@ -1053,7 +1078,7 @@ public partial class PopupWindow : Window
         ReorderAllItemsQueueFirst();
         RefreshFilter(0);
         SyncBatchPasteKeyboardHook();
-        _ = TryPushClipboardQueueHeadAsync();
+        SchedulePushBatchQueueHeadIfChanged(headBefore, mode);
     }
 
     private void TryAdvancePasteQueueAfterGlobalPaste()
@@ -1173,7 +1198,8 @@ public partial class PopupWindow : Window
                 }
 
                 ClipboardDiagnosticsLog.Write($"queueHead ok={ok}");
-                await Task.Delay(10);
+                if (ok)
+                    await Task.Delay(4);
             }
             finally
             {
@@ -1184,6 +1210,26 @@ public partial class PopupWindow : Window
         {
             _queueClipboardPushLock.Release();
         }
+    }
+
+    /// <summary>
+    /// 去重时从队列移除了条目，队首可能已变；须把剪贴板重新对齐队首（与 AutoBatchEnqueue 中「FIFO 队尾追加不推队首」配合）。
+    /// </summary>
+    private void RequestBatchQueueHeadClipboardResyncAfterDedup()
+    {
+        if (GetBatchMode() == BatchPasteQueueMode.Off || _batchQueue.Count == 0) return;
+        _ = TryPushClipboardQueueHeadAsync();
+    }
+
+    /// <summary>
+    /// FIFO 下新复制入队尾时队首引用不变，反复 Set 队首会与系统剪贴板互锁并卡顿；仅当队首变化或 LIFO 时再写剪贴板。
+    /// </summary>
+    private void SchedulePushBatchQueueHeadIfChanged(ClipboardEntry? headBeforeMutation, BatchPasteQueueMode mode)
+    {
+        var headAfter = _batchQueue.Count > 0 ? _batchQueue[0] : null;
+        if (mode == BatchPasteQueueMode.Fifo && ReferenceEquals(headBeforeMutation, headAfter))
+            return;
+        _ = TryPushClipboardQueueHeadAsync();
     }
 #else
     private void EnqueueSelectedForBatchPasteMode() { }
@@ -1198,6 +1244,7 @@ public partial class PopupWindow : Window
         var mode = GetBatchMode();
         if (mode == BatchPasteQueueMode.Off) return;
 
+        var headBefore = _batchQueue.Count > 0 ? _batchQueue[0] : null;
         _batchQueue.Remove(entry);
         if (mode == BatchPasteQueueMode.Fifo)
             _batchQueue.Add(entry);
@@ -1206,7 +1253,7 @@ public partial class PopupWindow : Window
         UpdateBatchOrderProperties();
         ReorderAllItemsQueueFirst();
         SyncBatchPasteKeyboardHook();
-        _ = TryPushClipboardQueueHeadAsync();
+        SchedulePushBatchQueueHeadIfChanged(headBefore, mode);
 #endif
     }
 
@@ -4580,8 +4627,12 @@ public partial class PopupWindow : Window
         }
         else
             ClearPendingDelete();
-        _batchQueue.Remove(entry);
+        var removedFromPasteQueue = _batchQueue.Remove(entry);
         UpdateBatchOrderProperties();
+#if CLIPX_CLIPBOARD
+        if (removedFromPasteQueue)
+            RequestBatchQueueHeadClipboardResyncAfterDedup();
+#endif
         if (entry.IsQuickPaste)
             _quickPastes.RemoveAll(q => q.Content == entry.TextContent);
         else
