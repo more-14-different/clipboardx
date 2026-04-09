@@ -1301,7 +1301,7 @@ public partial class PopupWindow : Window
             _ = PasteMultipleSelectedInOrderAsync(newlineAfterEachTextWhenCtrlEnter: ctrlHeldWithEnter);
             return;
         }
-        if (_batchQueue.Count > 0)
+        if (GetBatchMode() != BatchPasteQueueMode.Off && _batchQueue.Count > 0)
         {
             _ = PasteBatchQueueHeadAsync();
             return;
