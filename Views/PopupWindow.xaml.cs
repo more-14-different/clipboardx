@@ -115,6 +115,12 @@ public partial class PopupWindow : Window
     private string _panelModifierKey = "Ctrl";
     private bool _isDragging;
     private Win32.POINT _dragLastPt;
+    /// <summary>标题栏拖动时由鼠标钩 SetWindowPos 维护的 HWND 物理左上角；用于识别 Shell/贴靠对窗口的偷跑。</summary>
+    private int _hookAuthPhysLeft, _hookAuthPhysTop;
+    /// <summary>标题栏拖动松手后第一次 Sync：若 HWND 已被壳/DWM 甩离钩子最后一帧位置则拉回（与 H15 日志配对）。</summary>
+    private int _postDragHookAuthLeft = int.MinValue, _postDragHookAuthTop;
+    /// <summary>WM_DPICHANGED 后若干次 WINDOWPOSCHANGING 不再强制 SWP_NOMOVE，否则系统无法应用 DPI 建议矩形。</summary>
+    private int _windowPosNomoveSkipCount;
     private bool _clickReceivedByPopup;
     private int _pendingPhysX, _pendingPhysY;
     private bool _isOurSetWindowPos;
@@ -124,6 +130,46 @@ public partial class PopupWindow : Window
     private readonly ClipboardHistoryStore _historyStore = new();
     private AppSettings? _appSettings;
     private IntPtr _lastForegroundForDialogTrack = IntPtr.Zero;
+
+    #region agent log
+    private static readonly object _agentDbgLock = new();
+    private int _agentDbgDragMoveLogCount;
+    private int _agentDbgH17WpcSkipLogCount;
+    private int _agentDbgH20LogCount;
+    private int _agentDbgCachedPrimarySeamX = int.MinValue;
+    private int _agentDbgH21MismatchLogCount;
+    private int _agentDbgH22WpfHwndDipLogCount;
+
+    /// <summary>调试会话 NDJSON：写入项目根目录 debug-241056.log（相对 bin 向上三级）。</summary>
+    private static void AgentDbgLog(string hypothesisId, string location, string message, object? data = null)
+    {
+        try
+        {
+            var line = JsonSerializer.Serialize(new
+            {
+                sessionId = "241056",
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                hypothesisId,
+                location,
+                message,
+                data
+            }) + "\n";
+            lock (_agentDbgLock)
+            {
+                var workspaceLog = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory ?? ".", "..", "..", "..", "debug-241056.log"));
+                try
+                {
+                    File.AppendAllText(workspaceLog, line);
+                }
+                catch
+                {
+                    File.AppendAllText(Path.Combine(AppContext.BaseDirectory ?? ".", "debug-241056.log"), line);
+                }
+            }
+        }
+        catch { /* 调试日志失败不影响主流程 */ }
+    }
+    #endregion
 
     /// <summary>文件对话框跳转：2 秒内第二次 Ctrl+G 直接跳默认项（与列表预选一致）。</summary>
     private const int FileJumpDoubleTapMs = 2000;
@@ -170,6 +216,12 @@ public partial class PopupWindow : Window
     private IntPtr _lastExternalManagerRoot = IntPtr.Zero;
 
     public event Action? SettingsRequested;
+
+    /// <summary>
+    /// 呼出剪贴板面板时前台为开始菜单/搜索等 Shell；Win11 等系统可能将此类界面置于普通应用 HWND_TOPMOST 之上，
+    /// 用户态无法可靠置顶，订阅方可提示用户先按 Esc 关闭 Shell。
+    /// </summary>
+    public event Action? ShellForegroundMayOccludePopup;
 
     /// <summary>批量模式（普通 / LIFO / FIFO）切换后通知，用于托盘图标等。</summary>
     public event EventHandler? BatchPasteModeChanged;
@@ -505,11 +557,60 @@ public partial class PopupWindow : Window
                 return new IntPtr(Win32.MA_NOACTIVATE);
 
             case Win32.WM_DPICHANGED:
-                _isOurSetWindowPos = false;
+                // 允许紧随其后的 WINDOWPOSCHANGING 带上位置/尺寸，否则会与 WM_DPICHANGED 建议矩形冲突，跨屏缩放时表现为突然缩放、位置漂移。
+                _windowPosNomoveSkipCount = 8;
+                if (_isDragging)
+                {
+                    Win32.GetCursorPos(out _dragLastPt);
+                    #region agent log
+                    try
+                    {
+                        Win32.RECT suggested = default;
+                        if (lParam != IntPtr.Zero)
+                            suggested = Marshal.PtrToStructure<Win32.RECT>(lParam);
+                        Win32.GetWindowRect(hwnd, out var winRc);
+                        AgentDbgLog("H10", "WndProc WM_DPICHANGED", "drag: suppress default; suggested vs hwnd rect",
+                            new
+                            {
+                                dpiWParam = wParam.ToInt64(),
+                                suggested = new { suggested.Left, suggested.Top, suggested.Right, suggested.Bottom },
+                                winRect = new { winRc.Left, winRc.Top, winRc.Right, winRc.Bottom }
+                            });
+                    }
+                    catch
+                    {
+                        /* 调试日志 */
+                    }
+                    #endregion
+                    // 主屏右缘前约一窗宽内窗口会「跨屏」，系统发 WM_DPICHANGED 且 lParam 为建议矩形；WPF/DefWindowProc 若应用该矩形会与
+                    // 鼠标钩里的 SetWindowPos 抢位置，表现为危险区内跳变。拖动中吞掉本消息，松手后 Sync 再对齐 DPI/布局。
+                    handled = true;
+                    return IntPtr.Zero;
+                }
+
+                Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                    new Action(() => SyncWindowPhysicalPositionToWpf("wmDpiChanged")));
                 break;
 
             case Win32.WM_WINDOWPOSCHANGING:
-                if (!_isOurSetWindowPos && (_isPopupVisible || _lockPopupWindowNomove))
+                // WM_DPICHANGED 之后系统会连发若干 WINDOWPOSCHANGING；此间若强行 SWP_NOMOVE，跨屏拖动时壳/DWM 无法按新 DPI 微调位置，
+                // 会与鼠标钩 SetWindowPos 拉锯，表现为跨越边界时乱跳；松手后反而正常。故在计数窗口内一律不拦（与是否拖动无关）。
+                if (_windowPosNomoveSkipCount > 0 && !_isOurSetWindowPos)
+                {
+                    _windowPosNomoveSkipCount--;
+                    #region agent log
+                    if (_isDragging && _agentDbgH17WpcSkipLogCount < 32)
+                    {
+                        _agentDbgH17WpcSkipLogCount++;
+                        AgentDbgLog("H17", "WndProc WM_WINDOWPOSCHANGING", "skip NOMOVE (DPI chain)",
+                            new { remainingAfter = _windowPosNomoveSkipCount, our = _isOurSetWindowPos });
+                    }
+                    #endregion
+                    break;
+                }
+
+                // 外部发起的移动：弹窗常态锁位置；拖动时仅由钩子 SetWindowPos，禁止系统再改 x/y（尺寸仍可随 DPI 变）。
+                if (!_isOurSetWindowPos && (_isDragging || _isPopupVisible || _lockPopupWindowNomove))
                 {
                     var pos = Marshal.PtrToStructure<Win32.WINDOWPOS>(lParam);
                     pos.flags |= Win32.SWP_NOMOVE;
@@ -818,7 +919,8 @@ public partial class PopupWindow : Window
             items = items.Where(i => i.IsQuickPaste);
 
         if (_typeFilter.HasValue)
-            items = items.Where(i => i.Type == _typeFilter.Value);
+            items = items.Where(i => i.Type == _typeFilter.Value
+                || (_typeFilter.Value == EntryType.Image && i.IsImageFile));
 
         if (!string.IsNullOrEmpty(query))
             items = items.Where(i => i.MatchesSearch(query));
@@ -1759,6 +1861,8 @@ public partial class PopupWindow : Window
 
             ApplyPendingPositionSetWindowPos();
             TryApplyPendingPositionAsWpfLeftTop();
+            ReassertPopupTopmostZOrder();
+            ApplyShellForegroundZOrderFix();
         }
         finally
         {
@@ -1780,6 +1884,17 @@ public partial class PopupWindow : Window
         InstallKeyboardHook();
 #endif
         InstallMouseHook();
+
+        // Shell 会在后续帧继续改 Z 序：延迟重申相对置顶（尽力而为）。
+        Dispatcher.BeginInvoke(ReassertPopupTopmostZOrder, DispatcherPriority.Loaded);
+        Dispatcher.BeginInvoke(() =>
+        {
+            ReassertPopupTopmostZOrder();
+            ApplyShellForegroundZOrderFix();
+        }, DispatcherPriority.ContextIdle);
+
+        if (IsShellForegroundWindow(Win32.GetForegroundWindow()))
+            ShellForegroundMayOccludePopup?.Invoke();
     }
 
     private void ApplyPendingPositionSetWindowPos()
@@ -1790,6 +1905,90 @@ public partial class PopupWindow : Window
             Win32.SetWindowPos(_hwnd, IntPtr.Zero,
                 _pendingPhysX, _pendingPhysY, 0, 0,
                 Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+        }
+        finally
+        {
+            _isOurSetWindowPos = false;
+        }
+    }
+
+    /// <summary>
+    /// 在定位后重申 HWND_TOPMOST（单次），不抢焦点。
+    /// </summary>
+    private void ReassertPopupTopmostZOrder()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        _isOurSetWindowPos = true;
+        try
+        {
+            Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST,
+                0, 0, 0, 0,
+                Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+        }
+        finally
+        {
+            _isOurSetWindowPos = false;
+        }
+    }
+
+    /// <summary>
+    /// 当前前台是否为开始菜单、搜索等 Shell 全屏层；用于相对 Z 序与定时刷新。
+    /// </summary>
+    private static bool IsShellForegroundWindow(IntPtr fg)
+    {
+        if (fg == IntPtr.Zero) return false;
+        _ = Win32.GetWindowThreadProcessId(fg, out var pid);
+        if (pid == 0) return false;
+        try
+        {
+            using var p = Process.GetProcessById((int)pid);
+            var name = p.ProcessName;
+            if (IsDedicatedShellHostProcess(name))
+                return true;
+
+            // 任务栏搜索等：explorer.exe + WinUI CoreWindow（勿把 CabinetWClass 文件窗口当成 Shell）
+            if (name.Equals("explorer", StringComparison.OrdinalIgnoreCase))
+            {
+                var cls = Win32.GetWindowClassName(fg);
+                return cls.Equals("Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsDedicatedShellHostProcess(string name) =>
+        name.Equals("SearchHost", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("ShellHost", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 尽力将本窗口插在 Shell 根窗口之上并重申 TOPMOST。Win11 25H2 等版本可能将开始/搜索置于更高 Z 带，
+    /// 此时用户态无法保证显示在最前。
+    /// </summary>
+    private void ApplyShellForegroundZOrderFix()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        var fg = Win32.GetForegroundWindow();
+        if (!IsShellForegroundWindow(fg) || fg == _hwnd) return;
+
+        var root = Win32.GetAncestor(fg, Win32.GA_ROOT);
+        var insertAfter = root != IntPtr.Zero ? root : fg;
+        if (insertAfter == IntPtr.Zero || insertAfter == _hwnd) return;
+
+        // 先进 TOPMOST 带，再插在 Shell 根窗口之上，避免只做相对 Z 序时被后续 TOPMOST 冲掉顺序。
+        ReassertPopupTopmostZOrder();
+
+        _isOurSetWindowPos = true;
+        try
+        {
+            Win32.SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0,
+                Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
         }
         finally
         {
@@ -1848,9 +2047,56 @@ public partial class PopupWindow : Window
         Hide();
     }
 
+    /// <summary>
+    /// 开始菜单/搜索等 Shell 前台时，光标与插入点位置不可靠，不跟随；固定在当前显示器工作区左上，减少与居中 Shell 重叠。
+    /// </summary>
+    private void PositionPopupFixedShellWorkArea()
+    {
+        System.Drawing.Rectangle work;
+        if (_targetWindow != IntPtr.Zero && Win32.GetWindowRect(_targetWindow, out var fgRect))
+        {
+            int cx = (fgRect.Left + fgRect.Right) / 2;
+            int cy = (fgRect.Top + fgRect.Bottom) / 2;
+            work = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(cx, cy)).WorkingArea;
+        }
+        else
+        {
+            work = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea
+                   ?? new System.Drawing.Rectangle(0, 0,
+                       (int)SystemParameters.PrimaryScreenWidth,
+                       (int)SystemParameters.PrimaryScreenHeight);
+        }
+
+        var hMon = Win32.MonitorFromPoint(
+            new Win32.POINT { X = work.Left + work.Width / 2, Y = work.Top + work.Height / 2 },
+            Win32.MONITOR_DEFAULTTONEAREST);
+        Win32.GetDpiForMonitor(hMon, 0, out uint monDpiX, out uint monDpiY);
+        double scaleX = monDpiX / 96.0;
+        double scaleY = monDpiY / 96.0;
+
+        int popupW = (int)(Width * scaleX);
+        double actualH = ActualHeight > 0 ? ActualHeight : MaxHeight;
+        int popupH = (int)(actualH * scaleY);
+
+        const int margin = 16;
+        int x = work.Left + margin;
+        int y = work.Top + margin;
+        if (x + popupW > work.Right) x = Math.Max(work.Left, work.Right - popupW);
+        if (y + popupH > work.Bottom) y = Math.Max(work.Top, work.Bottom - popupH);
+
+        _pendingPhysX = x;
+        _pendingPhysY = y;
+    }
+
     private void PositionPopup()
     {
         const int caretGap = 24;
+
+        if (IsShellForegroundWindow(_targetWindow))
+        {
+            PositionPopupFixedShellWorkArea();
+            return;
+        }
 
         if (_popupPosition == "Mouse")
         {
@@ -1995,6 +2241,8 @@ public partial class PopupWindow : Window
 
     /// <summary>
     /// 在 Show() 之前把即将使用的物理像素坐标写成 WPF Left/Top，避免窗口先在 (0,0) 露一帧再 SetWindowPos。
+    /// 全局屏幕物理点不能仅用 CompositionTarget.TransformFromDevice：其随 HWND 所在监视器矩阵变化，跨 DPI 副屏会错（用户反馈「恢复成最初问题」）。
+    /// 使用 MonitorFromRect（有 HWND 尺寸时）或 MonitorFromPoint + GetDpiForMonitor 计算相对监视器的 DIP 偏移；监视器原点用 PhysicalToLogical(桌面) 或 VirtualScreen 拼接（避免 API 恒等返回）。
     /// </summary>
     private bool TryApplyPendingPositionAsWpfLeftTop()
     {
@@ -2007,19 +2255,233 @@ public partial class PopupWindow : Window
                 _hwnd = helper.Handle;
             }
 
+            int pw = 0, ph = 0;
+            if (_hwnd != IntPtr.Zero && Win32.GetWindowRect(_hwnd, out var rcWin))
+            {
+                pw = rcWin.Right - rcWin.Left;
+                ph = rcWin.Bottom - rcWin.Top;
+            }
+
+            if (TryPhysicalScreenTopLeftToWpfDip(_pendingPhysX, _pendingPhysY, pw, ph, out var dipX, out var dipY))
+            {
+                #region agent log
+                AgentDbgLog("H1", "TryApplyPendingPositionAsWpfLeftTop", "per-monitor physical→DIP",
+                    new { _pendingPhysX, _pendingPhysY, dipX, dipY });
+                #endregion
+                Left = dipX;
+                Top = dipY;
+                return true;
+            }
+
             var src = HwndSource.FromHwnd(_hwnd);
             if (src?.CompositionTarget == null) return false;
 
             var dip = src.CompositionTarget.TransformFromDevice.Transform(
                 new System.Windows.Point(_pendingPhysX, _pendingPhysY));
+            #region agent log
+            AgentDbgLog("H1", "TryApplyPendingPositionAsWpfLeftTop", "fallback TransformFromDevice",
+                new { _pendingPhysX, _pendingPhysY, dip.X, dip.Y });
+            #endregion
             Left = dip.X;
             Top = dip.Y;
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            #region agent log
+            AgentDbgLog("H1", "TryApplyPendingPositionAsWpfLeftTop", "exception",
+                new { ex.GetType().Name, ex.Message });
+            #endregion
             return false;
         }
+    }
+
+    /// <summary>
+    /// 将屏幕物理像素表示的窗口左上角转为 WPF 全局 DIP（与 <see cref="Window.Left"/> / <see cref="Window.Top"/> 一致）。
+    /// <paramref name="physW"/>/<paramref name="physH"/> 为窗口物理宽高时，用 <see cref="Win32.MonitorFromRect"/> 选监视器（与窗体交集最大），避免跨屏时仅用左上角误判已进入高 DPI 屏。
+    /// </summary>
+    private static bool TryPhysicalScreenTopLeftToWpfDip(int physX, int physY, int physW, int physH, out double dipX, out double dipY, bool agentLogH19 = true)
+    {
+        dipX = dipY = 0;
+        IntPtr hMon;
+        string monitorPick;
+        if (physW > 0 && physH > 0)
+        {
+            var rcSel = new Win32.RECT
+            {
+                Left = physX,
+                Top = physY,
+                Right = physX + physW,
+                Bottom = physY + physH
+            };
+            hMon = Win32.MonitorFromRect(ref rcSel, Win32.MONITOR_DEFAULTTONEAREST);
+            monitorPick = "rect";
+        }
+        else
+        {
+            hMon = IntPtr.Zero;
+            monitorPick = "point";
+        }
+
+        if (hMon == IntPtr.Zero)
+        {
+            var pt = new Win32.POINT { X = physX, Y = physY };
+            hMon = Win32.MonitorFromPoint(pt, Win32.MONITOR_DEFAULTTONEAREST);
+            monitorPick = "point";
+        }
+
+        if (hMon == IntPtr.Zero) return false;
+
+        var mi = new Win32.MONITORINFO { cbSize = Marshal.SizeOf<Win32.MONITORINFO>() };
+        if (!Win32.GetMonitorInfo(hMon, ref mi)) return false;
+
+        uint dpiX = 96, dpiY = 96;
+        if (Win32.GetDpiForMonitor(hMon, 0, out uint dpx, out uint dpy) == 0)
+        {
+            dpiX = dpx;
+            dpiY = dpy;
+        }
+
+        double relPhysX = physX - mi.rcMonitor.Left;
+        double relPhysY = physY - mi.rcMonitor.Top;
+        double relLogX = relPhysX * 96.0 / dpiX;
+        double relLogY = relPhysY * 96.0 / dpiY;
+
+        var desk = Win32.GetDesktopWindow();
+        if (desk == IntPtr.Zero) return false;
+
+        var monPt = new Win32.POINT { X = mi.rcMonitor.Left, Y = mi.rcMonitor.Top };
+        if (!Win32.ScreenToClient(desk, ref monPt))
+            return false;
+
+        var monLog = monPt;
+        bool physToLogOk = Win32.PhysicalToLogicalPointForPerMonitorDPI(desk, ref monLog);
+
+        // 日志：PhysicalToLogical 有时对「监视器原点」仍输出与物理数值同量纲，会把 DIP 当物理；高 DPI 下用 VirtualScreen 拼接原点
+        bool identitySuspect = physToLogOk &&
+            Math.Abs(monLog.X - mi.rcMonitor.Left) < 1.0 &&
+            Math.Abs(monLog.Y - mi.rcMonitor.Top) < 1.0 &&
+            (dpiX > 96 || dpiY > 96);
+
+        double monLeftDip, monTopDip;
+        if (!physToLogOk || identitySuspect)
+        {
+            int vx = Win32.GetSystemMetrics(Win32.SM_XVIRTUALSCREEN);
+            int vy = Win32.GetSystemMetrics(Win32.SM_YVIRTUALSCREEN);
+            monLeftDip = SystemParameters.VirtualScreenLeft + (mi.rcMonitor.Left - vx) * 96.0 / dpiX;
+            monTopDip = SystemParameters.VirtualScreenTop + (mi.rcMonitor.Top - vy) * 96.0 / dpiY;
+        }
+        else
+        {
+            monLeftDip = monLog.X;
+            monTopDip = monLog.Y;
+        }
+
+        dipX = monLeftDip + relLogX;
+        dipY = monTopDip + relLogY;
+        #region agent log
+        if (agentLogH19)
+        {
+            int vxLog = Win32.GetSystemMetrics(Win32.SM_XVIRTUALSCREEN);
+            int vyLog = Win32.GetSystemMetrics(Win32.SM_YVIRTUALSCREEN);
+            AgentDbgLog("H19", "TryPhysicalScreenTopLeftToWpfDip", "origin+dip",
+                new
+                {
+                    monitorPick,
+                    physW,
+                    physH,
+                    physToLogOk,
+                    identitySuspect,
+                    branch = !physToLogOk || identitySuspect ? "virtual" : "ptol",
+                    monPtClient = new { monPt.X, monPt.Y },
+                    monLog = new { monLog.X, monLog.Y },
+                    rcMon = new { mi.rcMonitor.Left, mi.rcMonitor.Top },
+                    vxLog,
+                    vyLog,
+                    dpiX,
+                    dpiY,
+                    monLeftDip,
+                    monTopDip,
+                    dipX,
+                    dipY
+                });
+        }
+        #endregion
+        return true;
+    }
+
+    /// <summary>
+    /// DPI 切换或拖动结束后，用 HWND 物理矩形同步 WPF Left/Top（DIP）。
+    /// 勿在跨屏拖动每一帧调用：全局物理坐标经 CompositionTarget.TransformFromDevice 时，若与 HWND 当前监视器 DPI 不一致会算错 Left/Top。
+    /// </summary>
+    private void SyncWindowPhysicalPositionToWpf(string syncSource)
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        if (!Win32.GetWindowRect(_hwnd, out var rc)) return;
+
+        // 松手后第一次同步：壳可能在 WH_MOUSE_LL 与 Dispatcher 之间移动 HWND（H2 曾见 Left=-985）；拉回钩子最后一帧权威位置。
+        if (_postDragHookAuthLeft != int.MinValue)
+        {
+            int authL = _postDragHookAuthLeft, authT = _postDragHookAuthTop;
+            _postDragHookAuthLeft = int.MinValue;
+            int dL = Math.Abs(rc.Left - authL);
+            int dT = Math.Abs(rc.Top - authT);
+            if (dL > 8 || dT > 8)
+            {
+                #region agent log
+                AgentDbgLog("H15", "SyncWindowPhysicalPositionToWpf", "post-drag rect drift vs hook auth; restoring",
+                    new { rc.Left, rc.Top, authL, authT, dL, dT });
+                #endregion
+                _isOurSetWindowPos = true;
+                try
+                {
+                    Win32.SetWindowPos(_hwnd, IntPtr.Zero, authL, authT, 0, 0,
+                        Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE | Win32.SWP_NOSENDCHANGING);
+                }
+                finally
+                {
+                    _isOurSetWindowPos = false;
+                }
+                if (!Win32.GetWindowRect(_hwnd, out rc)) return;
+            }
+        }
+
+        int vx = Win32.GetSystemMetrics(Win32.SM_XVIRTUALSCREEN);
+        int vy = Win32.GetSystemMetrics(Win32.SM_YVIRTUALSCREEN);
+        int vw = Win32.GetSystemMetrics(Win32.SM_CXVIRTUALSCREEN);
+        int vh = Win32.GetSystemMetrics(Win32.SM_CYVIRTUALSCREEN);
+        int w = rc.Right - rc.Left;
+        int h = rc.Bottom - rc.Top;
+        if (w > 0 && h > 0 && vw > 0 && vh > 0 &&
+            (rc.Left < vx - 64 || rc.Top < vy - 64 || rc.Left > vx + vw - 32 || rc.Top > vy + vh - 32))
+        {
+            int ol = rc.Left, ot = rc.Top;
+            int nl = Math.Clamp(rc.Left, vx, Math.Max(vx, vx + vw - w));
+            int nt = Math.Clamp(rc.Top, vy, Math.Max(vy, vy + vh - h));
+            _isOurSetWindowPos = true;
+            try
+            {
+                Win32.SetWindowPos(_hwnd, IntPtr.Zero, nl, nt, 0, 0,
+                    Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE | Win32.SWP_NOSENDCHANGING);
+            }
+            finally
+            {
+                _isOurSetWindowPos = false;
+            }
+            if (!Win32.GetWindowRect(_hwnd, out rc)) return;
+            #region agent log
+            AgentDbgLog("H14", "SyncWindowPhysicalPositionToWpf", "clamped off-screen hwnd rect (virtual)",
+                new { vx, vy, vw, vh, before = new { ol, ot }, after = new { nl, nt } });
+            #endregion
+        }
+
+        _pendingPhysX = rc.Left;
+        _pendingPhysY = rc.Top;
+        #region agent log
+        AgentDbgLog("H2", "SyncWindowPhysicalPositionToWpf", "before TryApply",
+            new { syncSource, rc.Left, rc.Top, rc.Right, rc.Bottom, _pendingPhysX, _pendingPhysY });
+        #endregion
+        TryApplyPendingPositionAsWpfLeftTop();
     }
 
     #endregion
@@ -2109,7 +2571,166 @@ public partial class PopupWindow : Window
             if (_isDragging)
             {
                 if (msg == Win32.WM_LBUTTONUP)
+                {
+                    // 壳/DWM 可能在钩子最后一帧 WM_MOUSEMOVE 与松手之间改写 HWND；此处立即对齐权威位置，减少与 BeginInvoke(Sync) 的竞态。
+                    if (Win32.GetWindowRect(_hwnd, out var rcUp))
+                    {
+                        int dl = Math.Abs(rcUp.Left - _hookAuthPhysLeft);
+                        int dt = Math.Abs(rcUp.Top - _hookAuthPhysTop);
+                        if (dl > 8 || dt > 8)
+                        {
+                            #region agent log
+                            AgentDbgLog("H15", "MouseHook WM_LBUTTONUP", "immediate drift vs hook auth; restoring",
+                                new { rcUp.Left, rcUp.Top, _hookAuthPhysLeft, _hookAuthPhysTop, dl, dt });
+                            #endregion
+                            _isOurSetWindowPos = true;
+                            try
+                            {
+                                Win32.SetWindowPos(_hwnd, IntPtr.Zero, _hookAuthPhysLeft, _hookAuthPhysTop, 0, 0,
+                                    Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE | Win32.SWP_NOSENDCHANGING);
+                            }
+                            finally
+                            {
+                                _isOurSetWindowPos = false;
+                            }
+                            _postDragHookAuthLeft = int.MinValue;
+                        }
+                        else
+                        {
+                            _postDragHookAuthLeft = _hookAuthPhysLeft;
+                            _postDragHookAuthTop = _hookAuthPhysTop;
+                        }
+                    }
+                    else
+                    {
+                        _postDragHookAuthLeft = _hookAuthPhysLeft;
+                        _postDragHookAuthTop = _hookAuthPhysTop;
+                    }
+
                     _isDragging = false;
+                    #region agent log
+                    _agentDbgDragMoveLogCount = 0;
+                    #endregion
+                    // 拖动结束再同步 WPF Left/Top；拖动过程中若每帧 TransformFromDevice，跨屏时与 HWND 实际所在监视器 DPI 不一致会导致错位。
+                    Dispatcher.BeginInvoke(DispatcherPriority.Input,
+                        new Action(() => SyncWindowPhysicalPositionToWpf("mouseHookLButtonUp")));
+                }
+                else if (msg == Win32.WM_MOUSEMOVE)
+                {
+                    // 必须用 GetCursorPos 与 Header_DragStart 一致：运行时日志显示 MSLLHOOKSTRUCT.pt 与 GetCursorPos
+                    // 在混合 DPI 下可差 2 倍（如 pt.X=3221 而 GetCursorPos=6442），用 pt 算 dx 会把窗口 SetWindowPos 到错误屏区。
+                    if (!Win32.GetCursorPos(out var curPt))
+                        return Win32.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+                    var dx = curPt.X - _dragLastPt.X;
+                    var dy = curPt.Y - _dragLastPt.Y;
+                    if (dx != 0 || dy != 0)
+                    {
+                        if (Win32.GetWindowRect(_hwnd, out var rc))
+                        {
+                            var nx = rc.Left + dx;
+                            var ny = rc.Top + dy;
+                            _isOurSetWindowPos = true;
+                            try
+                            {
+                                Win32.SetWindowPos(_hwnd, IntPtr.Zero,
+                                    nx, ny, 0, 0,
+                                    Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE
+                                    | Win32.SWP_NOSENDCHANGING);
+                            }
+                            finally
+                            {
+                                _isOurSetWindowPos = false;
+                            }
+
+                            Win32.GetWindowRect(_hwnd, out var rcAfter);
+                            _hookAuthPhysLeft = rcAfter.Left;
+                            _hookAuthPhysTop = rcAfter.Top;
+
+                            // 拖动中不同步 WPF Left/Top：日志显示每帧 Sync 与 SetWindowPos 竞争，且 desk→TryApply 曾把物理像素当 DIP，导致 HWND 跳到 2× 位置（如 486→972）。
+                            #region agent log
+                            if (_agentDbgH21MismatchLogCount < 50 &&
+                                (Math.Abs(rcAfter.Left - nx) > 16 || Math.Abs(rcAfter.Top - ny) > 16))
+                            {
+                                _agentDbgH21MismatchLogCount++;
+                                AgentDbgLog("H21", "MouseHook WM_MOUSEMOVE", "SetWindowPos vs GetWindowRect mismatch (shell/DWM?)",
+                                    new
+                                    {
+                                        nx,
+                                        ny,
+                                        actualLeft = rcAfter.Left,
+                                        actualTop = rcAfter.Top,
+                                        dlx = rcAfter.Left - nx,
+                                        dty = rcAfter.Top - ny
+                                    });
+                            }
+                            #endregion
+                            #region agent log
+                            if (_agentDbgDragMoveLogCount < 500)
+                            {
+                                _agentDbgDragMoveLogCount++;
+                                AgentDbgLog("H3", "MouseHookCallback WM_MOUSEMOVE", "after SetWindowPos+Sync",
+                                    new
+                                    {
+                                        nx,
+                                        ny,
+                                        rcAfter.Left,
+                                        rcAfter.Top,
+                                        wpfLeft = Left,
+                                        wpfTop = Top,
+                                        cursorX = curPt.X,
+                                        cursorY = curPt.Y,
+                                        hookPtX = info.pt.X,
+                                        hookPtY = info.pt.Y
+                                    });
+                            }
+                            #endregion
+                            #region agent log
+                            if (_agentDbgH20LogCount < 40 && _agentDbgCachedPrimarySeamX != int.MinValue)
+                            {
+                                int sx = _agentDbgCachedPrimarySeamX;
+                                if (rcAfter.Left < sx && rcAfter.Right > sx)
+                                {
+                                    int ww = rcAfter.Right - rcAfter.Left;
+                                    if (ww > 0)
+                                    {
+                                        double frac = (sx - rcAfter.Left) / (double)ww;
+                                        AgentDbgLog("H20", "MouseHook WM_MOUSEMOVE", "straddle primary vertical seam",
+                                            new { sx, rcAfter.Left, rcAfter.Right, fracFromWindowLeft = frac });
+                                        _agentDbgH20LogCount++;
+                                    }
+                                }
+                            }
+                            #endregion
+                            #region agent log
+                            if (_agentDbgH22WpfHwndDipLogCount < 30 &&
+                                _agentDbgCachedPrimarySeamX != int.MinValue)
+                            {
+                                int sx = _agentDbgCachedPrimarySeamX;
+                                if (rcAfter.Left < sx && rcAfter.Right > sx)
+                                {
+                                    int wStr = rcAfter.Right - rcAfter.Left;
+                                    int hStr = rcAfter.Bottom - rcAfter.Top;
+                                    if (wStr > 0 && hStr > 0 &&
+                                        TryPhysicalScreenTopLeftToWpfDip(rcAfter.Left, rcAfter.Top, wStr, hStr, out var expL, out var expT, agentLogH19: false))
+                                    {
+                                        double dL = Left - expL;
+                                        double dT = Top - expT;
+                                        if (Math.Abs(dL) > 3 || Math.Abs(dT) > 3)
+                                        {
+                                            _agentDbgH22WpfHwndDipLogCount++;
+                                            AgentDbgLog("H22", "MouseHook WM_MOUSEMOVE", "WPF Left/Top vs hwnd→DIP (straddle)",
+                                                new { wpfLeft = Left, wpfTop = Top, expL, expT, dL, dT, physLeft = rcAfter.Left, physTop = rcAfter.Top });
+                                        }
+                                    }
+                                }
+                            }
+                            #endregion
+                        }
+
+                        _dragLastPt = curPt;
+                    }
+                }
+
                 return Win32.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
             }
 
@@ -3738,6 +4359,16 @@ public partial class PopupWindow : Window
         }
 
         const double gap = 10;
+
+        // 开始菜单/搜索等 Shell 前台：主面板固定在屏幕一侧，预览改到主窗口正下方，避免横向弹出压住开始菜单。
+        if (IsShellForegroundWindow(Win32.GetForegroundWindow()))
+        {
+            EntryPreviewPopup.Placement = PlacementMode.Bottom;
+            EntryPreviewPopup.HorizontalOffset = 0;
+            EntryPreviewPopup.VerticalOffset = gap;
+            return;
+        }
+
         const double previewNominalW = 548;
         const double previewNominalH = 420;
 
@@ -4903,8 +5534,41 @@ public partial class PopupWindow : Window
     private void Header_DragStart(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        e.Handled = true;
         _isDragging = true;
         Win32.GetCursorPos(out _dragLastPt);
+        Win32.GetWindowRect(_hwnd, out var rc0);
+        _hookAuthPhysLeft = rc0.Left;
+        _hookAuthPhysTop = rc0.Top;
+        #region agent log
+        _agentDbgDragMoveLogCount = 0;
+        _agentDbgH20LogCount = 0;
+        _agentDbgH21MismatchLogCount = 0;
+        _agentDbgH22WpfHwndDipLogCount = 0;
+        _agentDbgCachedPrimarySeamX = int.MinValue;
+        try
+        {
+            var hPrim = Win32.MonitorFromPoint(new Win32.POINT { X = 0, Y = 0 }, Win32.MONITOR_DEFAULTTOPRIMARY);
+            var miPrim = new Win32.MONITORINFO { cbSize = Marshal.SizeOf<Win32.MONITORINFO>() };
+            if (hPrim != IntPtr.Zero && Win32.GetMonitorInfo(hPrim, ref miPrim))
+                _agentDbgCachedPrimarySeamX = miPrim.rcMonitor.Right;
+        }
+        catch { /* 调试 */ }
+        AgentDbgLog("H4", "Header_DragStart", "drag begin",
+            new
+            {
+                _hwnd = _hwnd.ToInt64(),
+                rc0.Left,
+                rc0.Top,
+                rc0.Right,
+                rc0.Bottom,
+                _dragLastPt.X,
+                _dragLastPt.Y,
+                wpfBeforeLeft = Left,
+                wpfBeforeTop = Top,
+                primarySeamX = _agentDbgCachedPrimarySeamX
+            });
+        #endregion
     }
 
     #endregion

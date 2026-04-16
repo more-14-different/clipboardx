@@ -22,6 +22,8 @@
     <Company>ClipboardX</Company>
     <RepositoryUrl>https://github.com/chaojimct/clipboardx</RepositoryUrl>
     <ApplicationIcon>assets\clipboard.ico</ApplicationIcon>
+    <!-- 多显示器不同缩放时，PerMonitorV2 与 WM_DPICHANGED 配合；避免跨屏拖动时错位/缩放突变 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
   <!-- 条件编译符号 -->

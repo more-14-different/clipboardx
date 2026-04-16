@@ -135,7 +135,7 @@ public static class PerUserInstall
 
         try
         {
-            StartupRegistration.Apply(false);
+            StartupRegistration.Apply(false, false);
         }
         catch { /* ignore */ }
 

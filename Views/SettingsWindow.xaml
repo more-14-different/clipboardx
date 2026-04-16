@@ -235,6 +235,8 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="10" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="10" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="12" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
@@ -350,9 +352,20 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <TextBlock Grid.Row="22" Grid.Column="0" Text="启动时检查更新"
+                        <TextBlock Grid.Row="22" Grid.Column="0" Text="以管理员身份启动"
                                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
                         <Border Grid.Row="22" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                                Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
+                                BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                Cursor="Hand" MouseLeftButtonUp="RunAsAdminCycle_Click"
+                                ToolTip="开启后每次启动会弹出 UAC；若取消则仍以普通权限运行。开机自启亦会请求提升。">
+                            <TextBlock x:Name="RunAsAdminText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
+                                       HorizontalAlignment="Center" />
+                        </Border>
+
+                        <TextBlock Grid.Row="24" Grid.Column="0" Text="启动时检查更新"
+                                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
+                        <Border Grid.Row="24" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="CheckUpdateOnStartupCycle_Click">
@@ -360,14 +373,14 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <StackPanel Grid.Row="24" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Grid.Row="26" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                             <Border Background="Transparent" Padding="0,4" ToolTip="{StaticResource ClipboardTipBatchMerge}">
                                 <TextBlock Text="文本批量合并粘贴" Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
                             </Border>
                             <Label Content="?" Style="{StaticResource ClipboardHelpGlyphLabel}"
                                    ToolTip="{StaticResource ClipboardTipBatchMerge}" />
                         </StackPanel>
-                        <Border Grid.Row="24" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <Border Grid.Row="26" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="BatchPasteMergeCycle_Click"
@@ -376,14 +389,14 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <StackPanel Grid.Row="26" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Grid.Row="28" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                             <Border Background="Transparent" Padding="0,4" ToolTip="{StaticResource ClipboardTipBatchQueueAutoNormal}">
                                 <TextBlock Text="FIFO/LIFO 贴完队后回普通" Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
                             </Border>
                             <Label Content="?" Style="{StaticResource ClipboardHelpGlyphLabel}"
                                    ToolTip="{StaticResource ClipboardTipBatchQueueAutoNormal}" />
                         </StackPanel>
-                        <Border Grid.Row="26" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <Border Grid.Row="28" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="BatchQueueAutoNormalCycle_Click"
@@ -392,7 +405,7 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <Button Grid.Row="28" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
+                        <Button Grid.Row="30" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
                                 HorizontalAlignment="Left" Height="34" Padding="16,0"
                                 FontSize="13" Background="{DynamicResource DangerBg}" Foreground="White"
                                 BorderBrush="Transparent" Cursor="Hand" Click="ClearHistory_Click" />

@@ -266,11 +266,32 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDesktopWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
+
+    /// <summary>
+    /// 将「相对 hwnd 客户区」的物理像素坐标转为逻辑坐标（DIP）。传入屏幕坐标时须先对 hwnd 调用 <see cref="ScreenToClient"/>。
+    /// </summary>
+    [DllImport("user32.dll")]
+    public static extern bool PhysicalToLogicalPointForPerMonitorDPI(IntPtr hwnd, ref POINT lpPoint);
+
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
+    /// <summary>不发送 WM_WINDOWPOSCHANGING，减少布局/壳与钩子 SetWindowPos 的链式反馈。</summary>
+    public const uint SWP_NOSENDCHANGING = 0x0400;
+
+    /// <summary>置于所有非置顶窗口之上（与 WPF Topmost 一致，用于在 Show 后重申 Z 序）。</summary>
+    public static readonly IntPtr HWND_TOPMOST = new(-1);
+
+    /// <summary>取消置顶；与 <see cref="HWND_TOPMOST"/> 交替调用可强制重排置顶栈（对抗 Shell 搜索等后抢 Z 序）。</summary>
+    public static readonly IntPtr HWND_NOTOPMOST = new(-2);
     public const int WM_WINDOWPOSCHANGING = 0x0046;
+    public const int WM_WINDOWPOSCHANGED = 0x0047;
     public const int WM_DPICHANGED = 0x02E0;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -281,7 +302,19 @@ internal static class Win32
         public int x, y, cx, cy;
         public uint flags;
     }
+    public const uint MONITOR_DEFAULTTONULL = 0;
+    public const uint MONITOR_DEFAULTTOPRIMARY = 1;
     public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    /// <summary>虚拟屏幕左上角 X（物理像素），与 <see cref="GetSystemMetrics"/> 配合用于多监视器坐标。</summary>
+    public const int SM_XVIRTUALSCREEN = 76;
+    /// <summary>虚拟屏幕左上角 Y（物理像素）。</summary>
+    public const int SM_YVIRTUALSCREEN = 77;
+    public const int SM_CXVIRTUALSCREEN = 78;
+    public const int SM_CYVIRTUALSCREEN = 79;
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int nIndex);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MONITORINFO
@@ -300,6 +333,10 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    /// <summary>返回与矩形交集面积最大的监视器；跨屏时比 <see cref="MonitorFromPoint"/> 仅用左上角更稳定。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromRect(ref RECT lprc, uint dwFlags);
 
     [DllImport("shcore.dll")]
     public static extern int GetDpiForMonitor(IntPtr hMonitor, int dpiType, out uint dpiX, out uint dpiY);
@@ -408,9 +445,6 @@ internal static class Win32
     public const uint WM_SETTEXT = 0x000C;
     public const uint WM_GETTEXT = 0x000D;
     public const uint WM_GETTEXTLENGTH = 0x000E;
-
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetDesktopWindow();
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetTopWindow(IntPtr hWnd);

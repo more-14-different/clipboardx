@@ -17,6 +17,7 @@ public partial class App : Application
 {
     private static Mutex? _mutex;
     private WinForms.NotifyIcon? _trayIcon;
+    private long _lastShellForegroundOcclusionBalloonTick;
     private PopupWindow? _popup;
 #if CLIPX_CLIPBOARD
     private BatchModeCycleHotkeyHost? _batchModeHotkeyHost;
@@ -100,6 +101,17 @@ public partial class App : Application
             return;
         }
 
+        _settings = AppSettings.Load();
+
+        if (_settings.RunAsAdministrator && !ProcessElevation.IsCurrentProcessElevated())
+        {
+            if (ProcessElevation.TryStartElevatedCopyAndExit(e.Args))
+            {
+                Shutdown(0);
+                return;
+            }
+        }
+
         _mutex = new Mutex(true, AppPaths.MutexName, out bool isNew);
         if (!isNew)
         {
@@ -112,10 +124,9 @@ public partial class App : Application
             return;
         }
 
-        _settings = AppSettings.Load();
         ThemeManager.Apply(_settings.Theme);
         PerUserInstall.EnsureUninstallRegistrationIfNeeded();
-        StartupRegistration.Apply(_settings.RunAtStartup);
+        StartupRegistration.Apply(_settings.RunAtStartup, _settings.RunAsAdministrator);
 
         _popup = new PopupWindow();
         _popup.Initialize(_settings);
@@ -134,7 +145,23 @@ public partial class App : Application
 #endif
 
         SetupTrayIcon(e.Args);
+        _popup.ShellForegroundMayOccludePopup += OnPopupShellForegroundMayOcclude;
         _ = CheckForUpdatesOnStartupAsync();
+    }
+
+    private void OnPopupShellForegroundMayOcclude()
+    {
+        if (_trayIcon == null) return;
+        var now = Environment.TickCount64;
+        if (now - _lastShellForegroundOcclusionBalloonTick < 120_000)
+            return;
+        _lastShellForegroundOcclusionBalloonTick = now;
+
+        _trayIcon.ShowBalloonTip(
+            10000,
+            "ClipboardX",
+            "开始菜单或搜索打开时，剪贴板窗口可能被系统界面挡住，属系统限制。请先按 Esc 关闭开始菜单或搜索，再按热键呼出。",
+            WinForms.ToolTipIcon.Info);
     }
 
     /// <summary>
@@ -200,7 +227,7 @@ public partial class App : Application
             Visible = true
         };
 
-        var menu = new WinForms.ContextMenuStrip();
+        var menu = new WinForms.ContextMenuStrip { ShowItemToolTips = true };
 #if CLIPX_CLIPBOARD
         menu.Items.Add($"显示 ({_settings.HotkeyDisplayName})", null, (_, _) =>
             Dispatcher.Invoke(() => _popup?.TogglePopup()));
@@ -222,6 +249,15 @@ public partial class App : Application
         {
             menu.Items.Add("卸载…", null, (_, _) =>
                 Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
+        }
+        else if (File.Exists(PerUserInstall.InstalledExecutablePath))
+        {
+            menu.Items.Add(new WinForms.ToolStripMenuItem("安装到当前用户…")
+            {
+                Enabled = false,
+                ToolTipText =
+                    "已在用户「程序」目录安装 ClipboardX。请从开始菜单或安装位置启动本程序后使用托盘「卸载」，或先卸载后再从此副本安装。"
+            });
         }
         else
         {
@@ -432,6 +468,7 @@ public partial class App : Application
             _settings.PopupOpacity = copy.PopupOpacity;
             _settings.HideOnSameAppClick = copy.HideOnSameAppClick;
             _settings.RunAtStartup = copy.RunAtStartup;
+            _settings.RunAsAdministrator = copy.RunAsAdministrator;
             _settings.CheckUpdatesOnStartup = copy.CheckUpdatesOnStartup;
             _settings.EnableShellNavigateInject = copy.EnableShellNavigateInject;
             _settings.FileJumpAutoOnFirstClick = copy.FileJumpAutoOnFirstClick;
@@ -441,7 +478,7 @@ public partial class App : Application
             _settings.BatchModeCycleHotkeyKey = copy.BatchModeCycleHotkeyKey;
             _settings.BatchPasteMergeText = copy.BatchPasteMergeText;
             _settings.BatchQueueAutoSwitchToNormalAfterQueueDone = copy.BatchQueueAutoSwitchToNormalAfterQueueDone;
-            StartupRegistration.Apply(_settings.RunAtStartup);
+            StartupRegistration.Apply(_settings.RunAtStartup, _settings.RunAsAdministrator);
             _settings.Save();
             _popup?.ApplySettings(_settings);
 #if CLIPX_CLIPBOARD

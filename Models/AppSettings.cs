@@ -61,6 +61,9 @@ public class AppSettings
     /// <summary>登录 Windows 时自动启动本程序（默认开启）。</summary>
     public bool RunAtStartup { get; set; } = true;
 
+    /// <summary>为 true 时，每次手动启动或开机自启均请求 UAC 以管理员身份运行（用户取消则退回普通权限）。</summary>
+    public bool RunAsAdministrator { get; set; }
+
     /// <summary>启动后静默访问 GitHub Releases，若有新版本则在托盘气泡提示（不弹阻断窗）。</summary>
     public bool CheckUpdatesOnStartup { get; set; } = true;
 
@@ -258,6 +261,7 @@ public class AppSettings
         PopupOpacity = PopupOpacity,
         HideOnSameAppClick = HideOnSameAppClick,
         RunAtStartup = RunAtStartup,
+        RunAsAdministrator = RunAsAdministrator,
         CheckUpdatesOnStartup = CheckUpdatesOnStartup,
         LastStartupUpdateNotifiedTag = LastStartupUpdateNotifiedTag,
         PreviewMaxLines = PreviewMaxLines,
