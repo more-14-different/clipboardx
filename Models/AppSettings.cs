@@ -70,6 +70,26 @@ public class AppSettings
     /// <summary>启动检测已提示过的发行 tag（如 v1.2.0），避免同一版本重复气泡；升级或已最新时会清空。</summary>
     public string? LastStartupUpdateNotifiedTag { get; set; }
     public int PreviewMaxLines { get; set; } = 2;
+
+    /// <summary>剪贴板弹窗宽度（DIP），默认与内置 XAML 一致。</summary>
+    public double PopupPanelWidth { get; set; } = 420;
+
+    /// <summary>剪贴板弹窗最大高度（DIP，列表区域随内容增高直至该上限）。</summary>
+    public double PopupPanelMaxHeight { get; set; } = 560;
+
+    /// <summary>列表每次翻过的条目数（PgUp/Dn、←→ 及翻页快捷键共用，原固定为 8）。</summary>
+    public int PopupPageItems { get; set; } = 8;
+
+    /// <summary>列表向上翻页组合键（须含修饰键，默认 Ctrl+-）。</summary>
+    public uint PanelPageScrollUpModifiers { get; set; } = Win32.MOD_CONTROL;
+
+    public uint PanelPageScrollUpKey { get; set; } = 0xBD;
+
+    /// <summary>列表向下翻页组合键（须含修饰键，默认 Ctrl+=）。</summary>
+    public uint PanelPageScrollDownModifiers { get; set; } = Win32.MOD_CONTROL;
+
+    public uint PanelPageScrollDownKey { get; set; } = 0xBB;
+
     public string PanelModifierKey { get; set; } = "Ctrl";
 
     /// <summary>批量粘贴：Off / Fifo / Lifo（与 <see cref="BatchPasteQueueMode"/> 枚举名一致）。</summary>
@@ -102,6 +122,9 @@ public class AppSettings
 
     public string BatchModeCycleHotkeyDisplayName => FormatHotkey(BatchModeCycleHotkeyModifiers, BatchModeCycleHotkeyKey);
 
+    /// <summary>用于设置中单键展示（无修饰键）。</summary>
+    public static string FormatSingleVk(uint vk) => VkToName(vk);
+
     public static string FormatHotkey(uint modifiers, uint key)
     {
         var parts = new List<string>();
@@ -118,11 +141,36 @@ public class AppSettings
         0xC0 => "`", 0xBD => "-", 0xBB => "=", 0xDB => "[", 0xDD => "]",
         0xDC => "\\", 0xBA => ";", 0xDE => "'", 0xBC => ",", 0xBE => ".",
         0xBF => "/", 0x20 => "Space",
+        0x6B => "Num +", 0x6D => "Num -",
         >= 0x70 and <= 0x7B => $"F{vk - 0x6F}",
         >= 0x30 and <= 0x39 => ((char)vk).ToString(),
         >= 0x41 and <= 0x5A => ((char)vk).ToString(),
         _ => $"0x{vk:X2}"
     };
+
+    public static void NormalizePopupPanelSettings(AppSettings s)
+    {
+        if (s.PopupPanelWidth < 280 || s.PopupPanelWidth > 1200 || double.IsNaN(s.PopupPanelWidth))
+            s.PopupPanelWidth = 420;
+        if (s.PopupPanelMaxHeight < 200 || s.PopupPanelMaxHeight > 900 || double.IsNaN(s.PopupPanelMaxHeight))
+            s.PopupPanelMaxHeight = 560;
+        if (s.PopupPageItems < 1 || s.PopupPageItems > 50)
+            s.PopupPageItems = 8;
+        if (s.PanelPageScrollUpModifiers == 0)
+            s.PanelPageScrollUpModifiers = Win32.MOD_CONTROL;
+        if (s.PanelPageScrollDownModifiers == 0)
+            s.PanelPageScrollDownModifiers = Win32.MOD_CONTROL;
+        if (s.PanelPageScrollUpKey == 0)
+            s.PanelPageScrollUpKey = 0xBD;
+        if (s.PanelPageScrollDownKey == 0)
+            s.PanelPageScrollDownKey = 0xBB;
+        if (s.PanelPageScrollUpModifiers == s.PanelPageScrollDownModifiers
+            && s.PanelPageScrollUpKey == s.PanelPageScrollDownKey)
+        {
+            s.PanelPageScrollUpKey = 0xBD;
+            s.PanelPageScrollDownKey = 0xBB;
+        }
+    }
 
     private static readonly string LegacySettingsDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -178,6 +226,7 @@ public class AppSettings
                     }
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
+                    NormalizePopupPanelSettings(settings);
                     return settings;
                 }
             }
@@ -222,6 +271,7 @@ public class AppSettings
                     }
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
+                    NormalizePopupPanelSettings(settings);
                     settings.Save();
                     return settings;
                 }
@@ -265,6 +315,13 @@ public class AppSettings
         CheckUpdatesOnStartup = CheckUpdatesOnStartup,
         LastStartupUpdateNotifiedTag = LastStartupUpdateNotifiedTag,
         PreviewMaxLines = PreviewMaxLines,
+        PopupPanelWidth = PopupPanelWidth,
+        PopupPanelMaxHeight = PopupPanelMaxHeight,
+        PopupPageItems = PopupPageItems,
+        PanelPageScrollUpModifiers = PanelPageScrollUpModifiers,
+        PanelPageScrollUpKey = PanelPageScrollUpKey,
+        PanelPageScrollDownModifiers = PanelPageScrollDownModifiers,
+        PanelPageScrollDownKey = PanelPageScrollDownKey,
         PanelModifierKey = PanelModifierKey,
         BatchPasteMode = BatchPasteMode,
         BatchModeCycleHotkeyModifiers = BatchModeCycleHotkeyModifiers,

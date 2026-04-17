@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 
 namespace ClipboardManager;
@@ -33,6 +34,12 @@ public partial class SettingsWindow : Window
     private string _pendingModifierKey;
     private bool _pendingBatchPasteMergeText;
     private bool _pendingBatchQueueAutoSwitchToNormalAfterQueueDone;
+    private uint _pendingPageScrollUpModifiers;
+    private uint _pendingPageScrollUpKey;
+    private uint _pendingPageScrollDownModifiers;
+    private uint _pendingPageScrollDownKey;
+    private bool _isRecordingPageScrollUpHotkey;
+    private bool _isRecordingPageScrollDownHotkey;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
 
@@ -108,6 +115,16 @@ public partial class SettingsWindow : Window
         FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
 
         PreviewLinesBox.Text = settings.PreviewMaxLines.ToString();
+
+        PopupWidthBox.Text = settings.PopupPanelWidth.ToString("0");
+        PopupMaxHeightBox.Text = settings.PopupPanelMaxHeight.ToString("0");
+        PopupPageItemsBox.Text = settings.PopupPageItems.ToString();
+        _pendingPageScrollUpModifiers = settings.PanelPageScrollUpModifiers;
+        _pendingPageScrollUpKey = settings.PanelPageScrollUpKey;
+        _pendingPageScrollDownModifiers = settings.PanelPageScrollDownModifiers;
+        _pendingPageScrollDownKey = settings.PanelPageScrollDownKey;
+        PanelPageUpKeyText.Text = AppSettings.FormatHotkey(_pendingPageScrollUpModifiers, _pendingPageScrollUpKey);
+        PanelPageDownKeyText.Text = AppSettings.FormatHotkey(_pendingPageScrollDownModifiers, _pendingPageScrollDownKey);
 
         _pendingModifierKey = settings.PanelModifierKey;
         ModifierText.Text = ModifierDisplayName(_pendingModifierKey);
@@ -397,6 +414,82 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void PanelPageUpKeyBox_Click(object sender, RoutedEventArgs e)
+    {
+        _isRecordingPageScrollUpHotkey = true;
+        PanelPageUpKeyText.Text = "按下组合键…";
+        PanelPageUpKeyText.Foreground = (System.Windows.Media.Brush)FindResource("AccentBg");
+        PanelPageUpKeyBox.Focus();
+    }
+
+    private void PanelPageUpKeyBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_isRecordingPageScrollUpHotkey) return;
+        e.Handled = true;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift
+            or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin)
+            return;
+
+        uint mod = GetHotkeyModifiersForRecording();
+        if (mod == 0) return;
+
+        _pendingPageScrollUpModifiers = mod;
+        _pendingPageScrollUpKey = (uint)KeyInterop.VirtualKeyFromKey(key);
+        _isRecordingPageScrollUpHotkey = false;
+        PanelPageUpKeyText.Text = AppSettings.FormatHotkey(_pendingPageScrollUpModifiers, _pendingPageScrollUpKey);
+        PanelPageUpKeyText.Foreground = (System.Windows.Media.Brush)FindResource("PrimaryText");
+    }
+
+    private void PanelPageUpKeyBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_isRecordingPageScrollUpHotkey)
+        {
+            _isRecordingPageScrollUpHotkey = false;
+            PanelPageUpKeyText.Text = AppSettings.FormatHotkey(_pendingPageScrollUpModifiers, _pendingPageScrollUpKey);
+            PanelPageUpKeyText.Foreground = (System.Windows.Media.Brush)FindResource("PrimaryText");
+        }
+    }
+
+    private void PanelPageDownKeyBox_Click(object sender, RoutedEventArgs e)
+    {
+        _isRecordingPageScrollDownHotkey = true;
+        PanelPageDownKeyText.Text = "按下组合键…";
+        PanelPageDownKeyText.Foreground = (System.Windows.Media.Brush)FindResource("AccentBg");
+        PanelPageDownKeyBox.Focus();
+    }
+
+    private void PanelPageDownKeyBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_isRecordingPageScrollDownHotkey) return;
+        e.Handled = true;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift
+            or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin)
+            return;
+
+        uint mod = GetHotkeyModifiersForRecording();
+        if (mod == 0) return;
+
+        _pendingPageScrollDownModifiers = mod;
+        _pendingPageScrollDownKey = (uint)KeyInterop.VirtualKeyFromKey(key);
+        _isRecordingPageScrollDownHotkey = false;
+        PanelPageDownKeyText.Text = AppSettings.FormatHotkey(_pendingPageScrollDownModifiers, _pendingPageScrollDownKey);
+        PanelPageDownKeyText.Foreground = (System.Windows.Media.Brush)FindResource("PrimaryText");
+    }
+
+    private void PanelPageDownKeyBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_isRecordingPageScrollDownHotkey)
+        {
+            _isRecordingPageScrollDownHotkey = false;
+            PanelPageDownKeyText.Text = AppSettings.FormatHotkey(_pendingPageScrollDownModifiers, _pendingPageScrollDownKey);
+            PanelPageDownKeyText.Foreground = (System.Windows.Media.Brush)FindResource("PrimaryText");
+        }
+    }
+
     private void ThemeCycle_Click(object sender, RoutedEventArgs e)
     {
         _pendingTheme = _pendingTheme switch
@@ -536,6 +629,35 @@ public partial class SettingsWindow : Window
             return;
         }
 
+        if (!double.TryParse(PopupWidthBox.Text, out var popupW) || popupW < 280 || popupW > 1200)
+        {
+            System.Windows.MessageBox.Show("面板宽度应在 280 ~ 1200（像素）之间", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (!double.TryParse(PopupMaxHeightBox.Text, out var popupH) || popupH < 200 || popupH > 900)
+        {
+            System.Windows.MessageBox.Show("面板最大高度应在 200 ~ 900（像素）之间", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (!int.TryParse(PopupPageItemsBox.Text, out var pageItems) || pageItems < 1 || pageItems > 50)
+        {
+            System.Windows.MessageBox.Show("每次翻页条数应在 1 ~ 50 之间", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (_pendingPageScrollUpModifiers == _pendingPageScrollDownModifiers
+            && _pendingPageScrollUpKey == _pendingPageScrollDownKey)
+        {
+            System.Windows.MessageBox.Show("向上翻页与向下翻页快捷键不能相同。", "提示",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         if (!int.TryParse(FileJumpDelayMsBox.Text, out var jumpDelayMs) || jumpDelayMs < 0 || jumpDelayMs > 10000)
         {
             System.Windows.MessageBox.Show("跳转列表延时应在 0 ~ 10000 毫秒之间（0 表示立即弹出）", "提示",
@@ -586,6 +708,14 @@ public partial class SettingsWindow : Window
         _settings.FileJumpAutoOnFirstClick = _pendingFileJumpAutoOnFirstClick;
         _settings.FileJumpAutoSyncOnReturn = _pendingFileJumpAutoSyncOnReturn;
         _settings.PreviewMaxLines = previewLines;
+        _settings.PopupPanelWidth = popupW;
+        _settings.PopupPanelMaxHeight = popupH;
+        _settings.PopupPageItems = pageItems;
+        _settings.PanelPageScrollUpModifiers = _pendingPageScrollUpModifiers;
+        _settings.PanelPageScrollUpKey = _pendingPageScrollUpKey;
+        _settings.PanelPageScrollDownModifiers = _pendingPageScrollDownModifiers;
+        _settings.PanelPageScrollDownKey = _pendingPageScrollDownKey;
+        AppSettings.NormalizePopupPanelSettings(_settings);
         _settings.PanelModifierKey = _pendingModifierKey;
         _settings.BatchPasteMergeText = _pendingBatchPasteMergeText;
         _settings.BatchQueueAutoSwitchToNormalAfterQueueDone = _pendingBatchQueueAutoSwitchToNormalAfterQueueDone;

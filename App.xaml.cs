@@ -473,6 +473,13 @@ public partial class App : Application
             _settings.EnableShellNavigateInject = copy.EnableShellNavigateInject;
             _settings.FileJumpAutoOnFirstClick = copy.FileJumpAutoOnFirstClick;
             _settings.PreviewMaxLines = copy.PreviewMaxLines;
+            _settings.PopupPanelWidth = copy.PopupPanelWidth;
+            _settings.PopupPanelMaxHeight = copy.PopupPanelMaxHeight;
+            _settings.PopupPageItems = copy.PopupPageItems;
+            _settings.PanelPageScrollUpModifiers = copy.PanelPageScrollUpModifiers;
+            _settings.PanelPageScrollUpKey = copy.PanelPageScrollUpKey;
+            _settings.PanelPageScrollDownModifiers = copy.PanelPageScrollDownModifiers;
+            _settings.PanelPageScrollDownKey = copy.PanelPageScrollDownKey;
             _settings.PanelModifierKey = copy.PanelModifierKey;
             _settings.BatchModeCycleHotkeyModifiers = copy.BatchModeCycleHotkeyModifiers;
             _settings.BatchModeCycleHotkeyKey = copy.BatchModeCycleHotkeyKey;

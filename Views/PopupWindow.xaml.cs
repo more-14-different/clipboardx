@@ -103,7 +103,11 @@ public partial class PopupWindow : Window
     /// <summary>当前标为「待二次 Del 删除」的条目，与 <see cref="ClipboardEntry.IsPendingDelete"/> 同步。</summary>
     private ClipboardEntry? _pendingDeleteEntry;
 
-    private const int PageSize = 8;
+    private int _pageSize = 8;
+    private uint _panelPageScrollUpModifiers = Win32.MOD_CONTROL;
+    private uint _panelPageScrollUpKey = 0xBD;
+    private uint _panelPageScrollDownModifiers = Win32.MOD_CONTROL;
+    private uint _panelPageScrollDownKey = 0xBB;
     private int _firstVisibleIndex;
 
     private uint _hotkeyModifiers;
@@ -248,6 +252,7 @@ public partial class PopupWindow : Window
         _quickPastes = settings.QuickPastes;
         _fileJumpHotkeyModifiers = settings.FileJumpHotkeyModifiers;
         _fileJumpHotkeyKey = settings.FileJumpHotkeyKey;
+        ApplyPopupPanelLayout(settings);
 
 #if CLIPX_CLIPBOARD
         LoadHistoryFromStore();
@@ -352,8 +357,21 @@ public partial class PopupWindow : Window
         return true;
     }
 
+    private void ApplyPopupPanelLayout(AppSettings settings)
+    {
+        AppSettings.NormalizePopupPanelSettings(settings);
+        _pageSize = settings.PopupPageItems;
+        _panelPageScrollUpModifiers = settings.PanelPageScrollUpModifiers;
+        _panelPageScrollUpKey = settings.PanelPageScrollUpKey;
+        _panelPageScrollDownModifiers = settings.PanelPageScrollDownModifiers;
+        _panelPageScrollDownKey = settings.PanelPageScrollDownKey;
+        Width = settings.PopupPanelWidth;
+        MaxHeight = settings.PopupPanelMaxHeight;
+    }
+
     public void ApplySettings(AppSettings settings)
     {
+        _appSettings = settings;
         _maxItems = settings.MaxItems;
         _popupPosition = settings.PopupPosition;
         _popupOpacity = settings.PopupOpacity;
@@ -362,6 +380,7 @@ public partial class PopupWindow : Window
         ClipboardEntry.PreviewMaxLines = settings.PreviewMaxLines;
         Opacity = _popupOpacity;
         _quickPastes = settings.QuickPastes;
+        ApplyPopupPanelLayout(settings);
         TrimItems();
         UpdateBatchHeaderUi();
 
@@ -4050,6 +4069,18 @@ public partial class PopupWindow : Window
             or 0x5B or 0x5C)
             return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
+        if (HotkeyModifiersActive(_panelPageScrollUpModifiers) && kb.vkCode == _panelPageScrollUpKey)
+        {
+            Dispatcher.BeginInvoke(() => ScrollPage(-1));
+            return (IntPtr)1;
+        }
+
+        if (HotkeyModifiersActive(_panelPageScrollDownModifiers) && kb.vkCode == _panelPageScrollDownKey)
+        {
+            Dispatcher.BeginInvoke(() => ScrollPage(1));
+            return (IntPtr)1;
+        }
+
         bool ctrlHeld = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
         bool altHeld = (Win32.GetAsyncKeyState(0x12) & 0x8000) != 0;
 
@@ -4064,16 +4095,6 @@ public partial class PopupWindow : Window
             if (kb.vkCode == 0x09)
             {
                 Dispatcher.BeginInvoke(ToggleQuickPhraseFilter);
-                return (IntPtr)1;
-            }
-            if (kb.vkCode == 0xBB)
-            {
-                Dispatcher.BeginInvoke(() => ScrollPage(1));
-                return (IntPtr)1;
-            }
-            if (kb.vkCode == 0xBD)
-            {
-                Dispatcher.BeginInvoke(() => ScrollPage(-1));
                 return (IntPtr)1;
             }
             if (kb.vkCode == Win32.VK_RETURN)
@@ -4197,6 +4218,27 @@ public partial class PopupWindow : Window
         return (IntPtr)1;
     }
 
+    /// <summary>与 <see cref="AppSettings.FormatHotkey"/> 注册语义一致：修饰键状态须与掩码完全一致。</summary>
+    private static bool HotkeyModifiersActive(uint requiredMods)
+    {
+        bool ctrl = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
+        bool shift = ((Win32.GetAsyncKeyState(0x10) & 0x8000) != 0)
+            || ((Win32.GetAsyncKeyState(0xA0) & 0x8000) != 0)
+            || ((Win32.GetAsyncKeyState(0xA1) & 0x8000) != 0);
+        bool alt = ((Win32.GetAsyncKeyState(0x12) & 0x8000) != 0)
+            || ((Win32.GetAsyncKeyState(0xA4) & 0x8000) != 0)
+            || ((Win32.GetAsyncKeyState(0xA5) & 0x8000) != 0);
+        bool win = ((Win32.GetAsyncKeyState(0x5B) & 0x8000) != 0)
+            || ((Win32.GetAsyncKeyState(0x5C) & 0x8000) != 0);
+
+        bool reqCtrl = (requiredMods & Win32.MOD_CONTROL) != 0;
+        bool reqShift = (requiredMods & Win32.MOD_SHIFT) != 0;
+        bool reqAlt = (requiredMods & Win32.MOD_ALT) != 0;
+        bool reqWin = (requiredMods & Win32.MOD_WIN) != 0;
+
+        return ctrl == reqCtrl && shift == reqShift && alt == reqAlt && win == reqWin;
+    }
+
     private bool IsPanelModifierDown()
     {
         bool ctrl = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
@@ -4273,14 +4315,13 @@ public partial class PopupWindow : Window
 
         ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
         ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(
-            $"与 {m} 同时按下时（在设置中可更换面板修饰键）：")
+            $"与 {m} 同时按下时（在设置中可更换面板主键）：")
             { Foreground = bodyBrush });
         ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
         foreach (var (key, label) in new (string Key, string Label)[]
         {
             ("1～9", "粘贴列表第 1～9 条"),
             ("Tab", "仅看快捷短语开/关"),
-            ("- / =", "列表向上 / 向下翻页"),
         })
         {
             ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run($"{m}+{key}") { Foreground = hintBrush });
@@ -4288,6 +4329,17 @@ public partial class PopupWindow : Window
             ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(label) { Foreground = bodyBrush });
             ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
         }
+
+        string pageUpFull = AppSettings.FormatHotkey(_panelPageScrollUpModifiers, _panelPageScrollUpKey);
+        string pageDnFull = AppSettings.FormatHotkey(_panelPageScrollDownModifiers, _panelPageScrollDownKey);
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(pageUpFull) { Foreground = hintBrush });
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("　"));
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("列表向上翻页") { Foreground = bodyBrush });
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run(pageDnFull) { Foreground = hintBrush });
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("　"));
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.Run("列表向下翻页（可在设置中修改）") { Foreground = bodyBrush });
+        ShortcutHelpFullText.Inlines.Add(new System.Windows.Documents.LineBreak());
     }
 
     /// <summary>底栏一行字数过多时用简短文案，完整说明见 more 气泡。</summary>
@@ -4611,7 +4663,7 @@ public partial class PopupWindow : Window
         int oldFirstVisible = Math.Max(0, (int)(sv.VerticalOffset / itemHeight));
         int relSelection = Math.Max(0, ItemsList.SelectedIndex - oldFirstVisible);
 
-        double newOffset = sv.VerticalOffset + direction * PageSize * itemHeight;
+        double newOffset = sv.VerticalOffset + direction * _pageSize * itemHeight;
         newOffset = Math.Max(0, Math.Min(newOffset, sv.ScrollableHeight));
         sv.ScrollToVerticalOffset(newOffset);
 

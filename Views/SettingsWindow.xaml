@@ -237,6 +237,15 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="10" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="10" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="10" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="10" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="10" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="12" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
@@ -342,9 +351,66 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <TextBlock Grid.Row="20" Grid.Column="0" Text="开机自启动"
+                        <TextBlock Grid.Row="20" Grid.Column="0" Text="面板宽度 (px)"
                                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
-                        <Border Grid.Row="20" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <TextBox x:Name="PopupWidthBox" Grid.Row="20" Grid.Column="1"
+                                 HorizontalAlignment="Right" Width="140"
+                                 FontSize="14" Padding="8,6"
+                                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
+                                 BorderBrush="{DynamicResource ThemeBorder}" CaretBrush="{DynamicResource PrimaryText}"
+                                 ToolTip="剪贴板弹窗宽度（DIP），建议 280～1200" />
+
+                        <TextBlock Grid.Row="22" Grid.Column="0" Text="面板最大高度 (px)"
+                                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
+                        <TextBox x:Name="PopupMaxHeightBox" Grid.Row="22" Grid.Column="1"
+                                 HorizontalAlignment="Right" Width="140"
+                                 FontSize="14" Padding="8,6"
+                                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
+                                 BorderBrush="{DynamicResource ThemeBorder}" CaretBrush="{DynamicResource PrimaryText}"
+                                 ToolTip="列表区域最大高度（DIP），建议 200～900" />
+
+                        <TextBlock Grid.Row="24" Grid.Column="0" Text="每次翻页条数"
+                                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
+                        <TextBox x:Name="PopupPageItemsBox" Grid.Row="24" Grid.Column="1"
+                                 HorizontalAlignment="Right" Width="140"
+                                 FontSize="14" Padding="8,6"
+                                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
+                                 BorderBrush="{DynamicResource ThemeBorder}" CaretBrush="{DynamicResource PrimaryText}"
+                                 ToolTip="与 PgUp/Dn、←→ 及下方翻页快捷键一致，每次滚动的条目数（1～50）" />
+
+                        <TextBlock Grid.Row="26" Grid.Column="0" Text="向上翻页快捷键"
+                                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
+                        <Border x:Name="PanelPageUpKeyBox" Grid.Row="26" Grid.Column="1"
+                                HorizontalAlignment="Right" Width="140"
+                                Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
+                                BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                Cursor="Hand" Focusable="True"
+                                MouseLeftButtonUp="PanelPageUpKeyBox_Click"
+                                PreviewKeyDown="PanelPageUpKeyBox_KeyDown"
+                                LostFocus="PanelPageUpKeyBox_LostFocus"
+                                ToolTip="点击后按下组合键（须含 Ctrl/Shift/Alt/Win 之一），默认 Ctrl+-">
+                            <TextBlock x:Name="PanelPageUpKeyText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
+                                       HorizontalAlignment="Center" />
+                        </Border>
+
+                        <TextBlock Grid.Row="28" Grid.Column="0" Text="向下翻页快捷键"
+                                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
+                        <Border x:Name="PanelPageDownKeyBox" Grid.Row="28" Grid.Column="1"
+                                HorizontalAlignment="Right" Width="140"
+                                Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
+                                BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                Cursor="Hand" Focusable="True"
+                                MouseLeftButtonUp="PanelPageDownKeyBox_Click"
+                                PreviewKeyDown="PanelPageDownKeyBox_KeyDown"
+                                LostFocus="PanelPageDownKeyBox_LostFocus"
+                                ToolTip="点击后按下组合键（须含修饰键），默认 Ctrl+=">
+                            <TextBlock x:Name="PanelPageDownKeyText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
+                                       HorizontalAlignment="Center" />
+                        </Border>
+
+                        <TextBlock Grid.Row="30" Grid.Column="0" Text="开机自启动"
+                                   Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
+                        <Border Grid.Row="30" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="StartupCycle_Click">
@@ -352,9 +418,9 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <TextBlock Grid.Row="22" Grid.Column="0" Text="以管理员身份启动"
+                        <TextBlock Grid.Row="32" Grid.Column="0" Text="以管理员身份启动"
                                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
-                        <Border Grid.Row="22" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <Border Grid.Row="32" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="RunAsAdminCycle_Click"
@@ -363,9 +429,9 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <TextBlock Grid.Row="24" Grid.Column="0" Text="启动时检查更新"
+                        <TextBlock Grid.Row="34" Grid.Column="0" Text="启动时检查更新"
                                    Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
-                        <Border Grid.Row="24" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <Border Grid.Row="34" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="CheckUpdateOnStartupCycle_Click">
@@ -373,14 +439,14 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <StackPanel Grid.Row="26" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Grid.Row="36" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                             <Border Background="Transparent" Padding="0,4" ToolTip="{StaticResource ClipboardTipBatchMerge}">
                                 <TextBlock Text="文本批量合并粘贴" Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
                             </Border>
                             <Label Content="?" Style="{StaticResource ClipboardHelpGlyphLabel}"
                                    ToolTip="{StaticResource ClipboardTipBatchMerge}" />
                         </StackPanel>
-                        <Border Grid.Row="26" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <Border Grid.Row="36" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="BatchPasteMergeCycle_Click"
@@ -389,14 +455,14 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <StackPanel Grid.Row="28" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Grid.Row="38" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                             <Border Background="Transparent" Padding="0,4" ToolTip="{StaticResource ClipboardTipBatchQueueAutoNormal}">
                                 <TextBlock Text="FIFO/LIFO 贴完队后回普通" Foreground="{DynamicResource PrimaryText}" FontSize="14" VerticalAlignment="Center" />
                             </Border>
                             <Label Content="?" Style="{StaticResource ClipboardHelpGlyphLabel}"
                                    ToolTip="{StaticResource ClipboardTipBatchQueueAutoNormal}" />
                         </StackPanel>
-                        <Border Grid.Row="28" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                        <Border Grid.Row="38" Grid.Column="1" HorizontalAlignment="Right" Width="140"
                                 Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
                                 BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                 Cursor="Hand" MouseLeftButtonUp="BatchQueueAutoNormalCycle_Click"
@@ -405,8 +471,8 @@
                                        HorizontalAlignment="Center" />
                         </Border>
 
-                        <Button Grid.Row="30" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
-                                HorizontalAlignment="Left" Height="34" Padding="16,0"
+                        <Button Grid.Row="39" Grid.ColumnSpan="2" Content="🗑 清空所有历史记录"
+                                HorizontalAlignment="Left" VerticalAlignment="Top" Height="34" Padding="16,0"
                                 FontSize="13" Background="{DynamicResource DangerBg}" Foreground="White"
                                 BorderBrush="Transparent" Cursor="Hand" Click="ClearHistory_Click" />
                     </Grid>
