@@ -231,7 +231,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ```powershell
 # 在仓库根目录执行
-$v = "1.3.4"   # 与 csproj 同步后改这里
+$v = "1.3.5"   # 与 csproj 同步后改这里
 Set-ExecutionPolicy -Scope Process -Bypass -Force
 .\native\ShellNavigate\build.ps1
 
@@ -291,6 +291,13 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 结构化列表见 **[CHANGELOG.md](CHANGELOG.md)**（推送 `v*` 标签后，GitHub Release 会从中截取当前版本的 **更新内容**）。以下为 README 内便于浏览的摘录；安装包见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**。
+
+### v1.3.5
+
+- **剪贴板 · 设置**：可自定义弹窗**宽度**、**最大高度**；**每次翻页条数**（与 PgUp/Dn、←→ 及翻页快捷键共用）
+- **剪贴板 · 翻页**：翻页改为**完整组合键**（默认 **Ctrl+-** / **Ctrl+=**，须含修饰键）；`settings.json` 中增加上下翻页的 **modifiers + key** 字段，旧版仅单键时会按 **Ctrl+** 迁移
+- **剪贴板 · 面板主键**：设置中**面板主键**（Ctrl / Alt / Win / CapsLock）恢复显示，便于与快贴、短语过滤等组合使用
+- **设置 UI**：修复「清空所有历史记录」按钮行在 Grid 中行定义缺失导致的**整行红色拉满**（补充行定义与行号）
 
 ### v1.3.4
 

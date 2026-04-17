@@ -4,6 +4,19 @@
 
 格式依据 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 的常见写法；日期为发布日（与 tag 推送日一致即可）。
 
+## [1.3.5] - 2026-04-15
+
+### 剪贴板 · 设置与外观
+
+- **面板尺寸**：可在设置中自定义剪贴板弹窗**宽度**与**最大高度**（DIP，带合理范围校验），写入 `settings.json`（`PopupPanelWidth` / `PopupPanelMaxHeight`）
+- **翻页条数**：新增「每次翻页条数」，与 **PgUp / PgDn、←→** 以及下方翻页快捷键一致，控制列表每次滚动的条目数（1～50，默认 8）
+- **翻页快捷键**：改为**完整组合键**录制（须含 **Ctrl / Shift / Alt / Win** 之一，与呼出快捷键相同交互）；默认仍为 **Ctrl+-** 向上、**Ctrl+=** 向下；配置为 `PanelPageScrollUpModifiers` / `PanelPageScrollUpKey` 与 `PanelPageScrollDownModifiers` / `PanelPageScrollDownKey`；从仅保存单键的旧配置加载时会自动补全为 **Ctrl+** 语义
+- **面板主键**：设置项恢复显示，可在 **Ctrl / Alt / Win / CapsLock** 间切换（与 **1～9** 快贴、**Tab** 短语过滤、**Enter** 等面板内组合逻辑一致）；帮助气泡中同步说明可在设置中更换
+
+### 设置界面
+
+- **修复**：「清空所有历史记录」按钮原 `Grid.Row` 超出 `RowDefinitions` 时，WPF 会为超出行隐式使用 `*` 行高，导致危险色按钮被**纵向拉满**；已补充 `RowDefinition`、修正行号并设 `VerticalAlignment="Top"`，避免误占满滚动区域
+
 ## [1.3.4] - 2026-04-10
 
 ### 剪贴板
