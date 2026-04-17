@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -3005,10 +3006,43 @@ public partial class PopupWindow : Window
 
         void StaCollect()
         {
+            if (gen != _fileJumpHotkeyCollectGen) return;
+            List<FileJumpCandidate> quick;
+            try
+            {
+                quick = FileManagerPathCollector.CollectCandidates(dialogHwndCapture, memCapture,
+                    skipAlternateUiAutomation: true, stopAfterCandidateCount: 2,
+                    shouldAbort: () => gen != _fileJumpHotkeyCollectGen);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "CollectCandidates quick (hotkey): " + ex);
+                quick = new List<FileJumpCandidate>();
+            }
+
+            if (gen != _fileJumpHotkeyCollectGen) return;
+
+            if (quick.Count >= 2)
+            {
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (gen != _fileJumpHotkeyCollectGen) return;
+                    TryJumpFileDialogToLastFolderContinueAfterCollect(
+                        dialogHwndCapture,
+                        quick,
+                        allowCapture,
+                        afterPickerAssigned: () => StartFullCollectForHotkey(dialogHwndCapture, memCapture, gen));
+                }, DispatcherPriority.Input);
+                return;
+            }
+
+            if (gen != _fileJumpHotkeyCollectGen) return;
+
             List<FileJumpCandidate> candidates;
             try
             {
-                candidates = FileManagerPathCollector.CollectCandidates(dialogHwndCapture, memCapture);
+                candidates = FileManagerPathCollector.CollectCandidates(dialogHwndCapture, memCapture,
+                    shouldAbort: () => gen != _fileJumpHotkeyCollectGen);
             }
             catch (Exception ex)
             {
@@ -3035,7 +3069,8 @@ public partial class PopupWindow : Window
     private void TryJumpFileDialogToLastFolderContinueAfterCollect(
         IntPtr dialogHwnd,
         List<FileJumpCandidate> candidates,
-        bool allowShellInject)
+        bool allowShellInject,
+        Action? afterPickerAssigned = null)
     {
         if (_appSettings == null) return;
         if (dialogHwnd == IntPtr.Zero || !Win32.IsWindow(dialogHwnd))
@@ -3094,7 +3129,65 @@ public partial class PopupWindow : Window
         }
 
         ScheduleFileJumpPickerOpen(dialogHwnd, candidates.ToList(), prefer, armHotkeyDoubleTap: true, allowShellInject,
-            autoForegroundStickyMode: false);
+            autoForegroundStickyMode: false, afterPickerAssigned);
+    }
+
+    /// <summary>完整采集（含 UIA）完成后刷新已打开的跳转列表。</summary>
+    private void StartFullCollectForHotkey(IntPtr dialogHwnd, string? mem, int gen)
+    {
+        Task.Run(() =>
+        {
+            List<FileJumpCandidate> full;
+            try
+            {
+                full = FileManagerPathCollector.CollectCandidates(dialogHwnd, mem,
+                    shouldAbort: () => gen != _fileJumpHotkeyCollectGen);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "CollectCandidates (hotkey full): " + ex);
+                full = new List<FileJumpCandidate>();
+            }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (gen != _fileJumpHotkeyCollectGen) return;
+                TryJumpFileDialogRefreshPickerIfOpen(dialogHwnd, full);
+            }, DispatcherPriority.Normal);
+        });
+    }
+
+    /// <summary>完整采集（含 UIA）完成后刷新已打开的跳转列表。</summary>
+    private void StartFullCollectForAutoForeground(IntPtr dialogHwnd, string? mem, int gen)
+    {
+        Task.Run(() =>
+        {
+            List<FileJumpCandidate> full;
+            try
+            {
+                full = FileManagerPathCollector.CollectCandidates(dialogHwnd, mem,
+                    shouldAbort: () => gen != _fileJumpAutoForegroundCollectGen);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "CollectCandidates (auto fg full): " + ex);
+                full = new List<FileJumpCandidate>();
+            }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (gen != _fileJumpAutoForegroundCollectGen) return;
+                TryJumpFileDialogRefreshPickerIfOpen(dialogHwnd, full);
+            }, DispatcherPriority.Normal);
+        });
+    }
+
+    private void TryJumpFileDialogRefreshPickerIfOpen(IntPtr dialogHwnd, List<FileJumpCandidate> full)
+    {
+        if (_activeFileJumpPicker == null) return;
+        var root = Win32.GetAncestor(dialogHwnd, Win32.GA_ROOT);
+        if (root == IntPtr.Zero || !ActivePickerMatchesDialog(root)) return;
+        _activeFileJumpPicker.RefreshCandidatesFromExternal(full);
     }
 
     /// <summary>
@@ -3123,7 +3216,12 @@ public partial class PopupWindow : Window
         _fileJumpAutoOpenDebounceTimer?.Stop();
         _fileJumpAutoOpenDebounceTimer = null;
         var hwndCapture = foregroundHwnd;
-        _fileJumpAutoOpenDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(420) };
+        var delayMs = Math.Clamp(_appSettings.FileJumpPickerShowDelayMs, 0, 10000);
+        // 打开/保存窗到前台时，系统常在极短时间内多次触发；延时为 0 时仍用短防抖合并，避免并行多个 STA 采集线程。
+        // 采集本身已压到数十毫秒级（见 debug 日志），此处过长会明显拖慢「延时填 0」时的体感。
+        var effectiveMs = delayMs <= 0 ? 80 : delayMs;
+
+        _fileJumpAutoOpenDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(effectiveMs) };
         _fileJumpAutoOpenDebounceTimer.Tick += (_, _) =>
         {
             _fileJumpAutoOpenDebounceTimer?.Stop();
@@ -3179,10 +3277,45 @@ public partial class PopupWindow : Window
 
         void StaCollect()
         {
+            if (gen != _fileJumpAutoForegroundCollectGen) return;
+            List<FileJumpCandidate> quick;
+            try
+            {
+                quick = FileManagerPathCollector.CollectCandidates(dialogHwndCapture, memCapture,
+                    skipAlternateUiAutomation: true, stopAfterCandidateCount: 2,
+                    shouldAbort: () => gen != _fileJumpAutoForegroundCollectGen);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "CollectCandidates quick (auto fg): " + ex);
+                quick = new List<FileJumpCandidate>();
+            }
+
+            if (gen != _fileJumpAutoForegroundCollectGen) return;
+
+            if (quick.Count >= 2)
+            {
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (gen != _fileJumpAutoForegroundCollectGen) return;
+                    TryAutoOpenFileJumpPickerAfterCollect(
+                        dialogHwndCapture,
+                        dialogRootCapture,
+                        quick,
+                        allowCapture,
+                        afterPickerAssigned: () =>
+                            StartFullCollectForAutoForeground(dialogHwndCapture, memCapture, gen));
+                }, DispatcherPriority.Input);
+                return;
+            }
+
+            if (gen != _fileJumpAutoForegroundCollectGen) return;
+
             List<FileJumpCandidate> candidates;
             try
             {
-                candidates = FileManagerPathCollector.CollectCandidates(dialogHwndCapture, memCapture);
+                candidates = FileManagerPathCollector.CollectCandidates(dialogHwndCapture, memCapture,
+                    shouldAbort: () => gen != _fileJumpAutoForegroundCollectGen);
             }
             catch (Exception ex)
             {
@@ -3210,7 +3343,8 @@ public partial class PopupWindow : Window
         IntPtr dialogHwnd,
         IntPtr dialogRoot,
         List<FileJumpCandidate> candidates,
-        bool allowShellInject)
+        bool allowShellInject,
+        Action? afterPickerAssigned = null)
     {
         if (_appSettings == null || !_appSettings.FileJumpPickerOpenWhenDialogForeground) return;
         if (dialogHwnd == IntPtr.Zero || !Win32.IsWindow(dialogHwnd)) return;
@@ -3245,7 +3379,7 @@ public partial class PopupWindow : Window
         }
 
         ScheduleFileJumpPickerOpen(dialogHwnd, candidates.ToList(), prefer, armHotkeyDoubleTap: false, allowShellInject,
-            autoForegroundStickyMode: true);
+            autoForegroundStickyMode: true, afterPickerAssigned);
     }
 
     #region 切回对话框自动同步路径
@@ -3473,7 +3607,8 @@ public partial class PopupWindow : Window
         int preferIdx,
         bool armHotkeyDoubleTap,
         bool allowShellInject,
-        bool autoForegroundStickyMode)
+        bool autoForegroundStickyMode,
+        Action? afterPickerAssigned = null)
     {
         if (_appSettings == null) return;
 
@@ -3497,6 +3632,8 @@ public partial class PopupWindow : Window
         var delaySession = _fileJumpDelaySession;
 
         var delayMs = Math.Clamp(_appSettings.FileJumpPickerShowDelayMs, 0, 10000);
+
+        var openPriority = delayMs <= 0 ? DispatcherPriority.Input : DispatcherPriority.Normal;
 
         void QueueOpenFileJumpPicker()
         {
@@ -3531,6 +3668,15 @@ public partial class PopupWindow : Window
                             _activeFileJumpPicker = null;
                         ClearFileJumpDoubleTapState();
                     };
+                    try
+                    {
+                        afterPickerAssigned?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        ShellNavigateLog.Write("filejump", "afterPickerAssigned: " + ex);
+                    }
+
                     var accepted = picker.ShowDialog() == true;
                     if (!autoForegroundStickyMode && accepted && !string.IsNullOrEmpty(picker.SelectedPath))
                         FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath, allowShellInject);
@@ -3539,7 +3685,7 @@ public partial class PopupWindow : Window
                 {
                     _fileJumpPickerOpenInProgress = false;
                 }
-            }, DispatcherPriority.Normal);
+            }, openPriority);
         }
 
         if (delayMs <= 0)

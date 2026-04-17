@@ -41,7 +41,7 @@
                 <!-- 标题栏 -->
                 <Grid Grid.Row="0" Margin="16,12,16,8">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="Everything" FontSize="14" FontWeight="SemiBold"
+                        <TextBlock Text="findx" FontSize="14" FontWeight="SemiBold"
                                    Foreground="{DynamicResource PrimaryText}" VerticalAlignment="Center"
                                    Opacity="0.7"/>
                     </StackPanel>
@@ -75,9 +75,22 @@
                 <!-- 底栏提示 -->
                 <Border Grid.Row="4" Padding="14,7" Background="{DynamicResource FooterBrush}"
                         CornerRadius="0,0,12,12">
-                    <TextBlock x:Name="HintLabel" Foreground="{DynamicResource MutedText}" FontSize="10"
-                               HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"
-                               Text="↑↓ 选择 · Enter 定位 · Esc 关闭"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="HintLabel" Grid.Column="0" Foreground="{DynamicResource MutedText}" FontSize="10"
+                                   HorizontalAlignment="Left" TextWrapping="Wrap" TextAlignment="Left"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Grid.Column="1" FontSize="10" VerticalAlignment="Center" TextWrapping="Wrap">
+                            <Run Text="findx · 秒搜本地 " Foreground="{DynamicResource MutedText}"/>
+                            <Hyperlink NavigateUri="https://github.com/chaojimct/findx" RequestNavigate="FindxGitHub_RequestNavigate"
+                                       TextDecorations="None" Foreground="{DynamicResource AccentBg}">
+                                GitHub
+                            </Hyperlink>
+                        </TextBlock>
+                    </Grid>
                 </Border>
             </Grid>
         </Border>

@@ -6,9 +6,17 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-15
+
+### 文件对话框跳转（Ctrl+G / 到前台自动弹出）
+
+- **性能**：同一次 `CollectCandidates` 内 **Shell.Application.Windows** 仅枚举一次；**ExplorerComMatchScore ≥ 4**（COM 与 HWND 精确匹配）时跳过资源管理器整窗 **relaxed UIA**（原为主要耗时）；**延时为 0** 时合并前台防抖由 **180ms → 80ms**
+- **findx 展示**：补充列表来源标签、底栏、设置说明等改为 **findx** 品牌与 **GitHub** 链接；底栏快捷键提示压缩为单行并去掉冗余说明
+- **焦点**：粘性贴靠模式下去除 **Win32 Owner**、首帧 **`SetWindowPos` 允许激活**、**`SetForegroundWindowAggressive`**（`AttachThreadInput` + 前台），弹出后键盘可直接进入 **findx 筛选**
+
 ### 实验性功能 · 资源管理器与 Everything
 
-- **当前文件夹内键入筛选**（默认关闭）：在系统资源管理器、焦点不在地址栏/搜索框时直接键入字符，通过 **Everything** IPC 将结果限定在当前文件夹（含子文件夹），小窗列出匹配项，**Enter** 在资源管理器中定位选中项。**设置 → 实验性功能** 可开启并设置「筛选最大条数」（1～2000）。需本机已安装并运行 Everything；`Everything64.dll` 随构建复制到程序目录（与程序集同目录加载）
+- **当前文件夹内键入筛选** 默认 **开启**（`settings.json` 中无 `ExplorerEverythingQuickFindEnabled` 的既有配置会迁移为开启）；在资源管理器、焦点不在地址栏/搜索框时直接键入字符，通过 **Everything** IPC 将结果限定在当前文件夹（含子文件夹），小窗列出匹配项，**Enter** 在资源管理器中定位；**设置 → 实验性功能** 可关闭并设置「筛选最大条数」（1～2000）。需本机已安装并运行 Everything；`Everything64.dll` 随构建复制到程序目录
 
 ## [1.3.6] - 2026-04-16
 

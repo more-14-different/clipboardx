@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -13,6 +14,8 @@ namespace ClipboardManager;
 /// </summary>
 internal static class EverythingIpc
 {
+    private static readonly object IpcSync = new();
+
     private const uint EverythingRequestFullPathAndFileName = 0x00000004;
     private const uint EverythingErrorOk = 0;
     private const int SearchFragmentCapacity = 2048;
@@ -152,8 +155,60 @@ internal static class EverythingIpc
         return list;
     }
 
+    /// <summary>同一进程内 Everything IPC 为全局状态，与其它查询串行执行（含资源管理器双次查询、跳转列表文件夹检索）。</summary>
+    public static void InvokeExclusive(Action action)
+    {
+        lock (IpcSync) action();
+    }
+
     /// <summary>尝试查询；失败时 <paramref name="lastError"/> 为 Everything_GetLastError，DLL 未加载为 <see cref="LastErrorDllNotFound"/> 等。</summary>
     public static bool TryQueryFullPaths(string searchExpression, int maxResults, List<string> paths, out int lastError)
+    {
+        lock (IpcSync)
+            return TryQueryFullPathsCore(searchExpression, maxResults, paths, out lastError);
+    }
+
+    /// <summary>限定为文件夹的检索（<c>folder:"…"</c>），并剔除已不存在的路径。</summary>
+    public static bool TryQueryFolderPaths(string userTyping, int maxResults, List<string> paths, out int lastError)
+    {
+        paths.Clear();
+        lastError = LastErrorDllNotFound;
+        var q = userTyping.Trim();
+        if (q.Length == 0)
+        {
+            lastError = unchecked((int)EverythingErrorOk);
+            return true;
+        }
+
+        if (q.Length > 1800) q = q[..1800];
+        var escaped = q.Replace("\"", "\\\"");
+        var search = $"folder:\"{escaped}\"";
+
+        lock (IpcSync)
+        {
+            if (!TryQueryFullPathsCore(search, maxResults, paths, out lastError))
+                return false;
+
+            for (var i = paths.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    if (!Directory.Exists(paths[i]))
+                        paths.RemoveAt(i);
+                }
+                catch
+                {
+                    paths.RemoveAt(i);
+                }
+            }
+
+            lastError = unchecked((int)EverythingErrorOk);
+            return true;
+        }
+    }
+
+    /// <summary>无锁；须在 <see cref="InvokeExclusive"/> 或 <see cref="TryQueryFullPaths"/> 已持锁时调用。</summary>
+    internal static bool TryQueryFullPathsCore(string searchExpression, int maxResults, List<string> paths, out int lastError)
     {
         paths.Clear();
         lastError = LastErrorDllNotFound;
@@ -179,6 +234,7 @@ internal static class EverythingIpc
 
             Everything_SetRequestFlags(EverythingRequestFullPathAndFileName);
             Everything_SetMax((uint)Math.Clamp(maxResults, 1, 10_000));
+            // 搜索串由 ExplorerQuickFind 使用 parent:"路径" 构造；勿依赖 SetMatchPath，亦勿再使用「C:\ 关键词」形式（IPC 实测恒 0 条）
 
             var buf = searchExpression.AsSpan();
             if (buf.Length > SearchFragmentCapacity)

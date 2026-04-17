@@ -1,14 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Navigation;
 using System.Windows.Threading;
 using Media = System.Windows.Media;
 using Orientation = System.Windows.Controls.Orientation;
@@ -69,6 +74,11 @@ public partial class FileDialogJumpPickerWindow : Window
     private readonly List<FileJumpPickerRow> _masterRows = new();
     private readonly ObservableCollection<FileJumpPickerRow> _displayRows = new();
 
+    private readonly List<string> _everythingFolderPaths = new();
+    private string _everythingPathsValidForQuery = "";
+    private int _everythingQueryGen;
+    private CancellationTokenSource? _everythingQueryCts;
+
     public string? SelectedPath { get; private set; }
     public IntPtr OwnerDialogHwnd => _fileDialogOwnerHwnd;
     public bool IsAutoForegroundStickyMode => _autoForegroundStickyMode;
@@ -128,6 +138,8 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void FileDialogJumpPickerWindow_Closed(object? sender, EventArgs e)
     {
+        _everythingQueryCts?.Cancel();
+        _everythingQueryCts = null;
         _dockFollowTimer?.Stop();
         _dockFollowTimer = null;
         UninstallKeyboardHook();
@@ -144,7 +156,6 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void FileDialogJumpPickerWindow_Activated(object? sender, EventArgs e)
     {
-        if (_autoForegroundStickyMode) return;
         if (IsLoaded)
             Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
     }
@@ -157,8 +168,16 @@ public partial class FileDialogJumpPickerWindow : Window
             var hwnd = new WindowInteropHelper(this).Handle;
             if (hwnd != IntPtr.Zero)
             {
-                Win32.SetForegroundWindow(hwnd);
-                Win32.SetFocus(hwnd);
+                // 另存为等对话框与跳转窗常跨线程；单纯 SetForegroundWindow 易被系统拒绝；与 PopupWindow 夺前台策略一致。
+                Win32.SetForegroundWindowAggressive(hwnd);
+                try
+                {
+                    Win32.SetFocus(hwnd);
+                }
+                catch
+                {
+                    /* ignore */
+                }
             }
         }
         catch { /* ignore */ }
@@ -514,16 +533,29 @@ public partial class FileDialogJumpPickerWindow : Window
         }
     }
 
-    private void RefreshFilter(int? preferListIndex = null)
+    private void RefreshFilter(int? preferListIndex = null, string? preferPath = null)
     {
+        var keepPath = preferPath ?? (ItemsList.SelectedItem as FileJumpPickerRow)?.Path;
         _displayRows.Clear();
         _firstVisibleIndex = 0;
+
+        var query = _searchText.Trim();
+        if (string.IsNullOrEmpty(query) || !_settings.FileJumpPickerEverythingFolderSearch)
+        {
+            _everythingFolderPaths.Clear();
+            _everythingPathsValidForQuery = "";
+            _everythingQueryCts?.Cancel();
+        }
+        else if (!string.Equals(query, _everythingPathsValidForQuery, StringComparison.OrdinalIgnoreCase))
+        {
+            _everythingFolderPaths.Clear();
+            _everythingPathsValidForQuery = "";
+        }
 
         IEnumerable<FileJumpPickerRow> seq = _masterRows;
         if (_favoritesOnly)
             seq = seq.Where(r => r.IsFavorite);
 
-        var query = _searchText.Trim();
         if (!string.IsNullOrEmpty(query))
             seq = seq.Where(r => r.MatchesSearch(query));
 
@@ -535,17 +567,94 @@ public partial class FileDialogJumpPickerWindow : Window
         foreach (var r in sorted)
             _displayRows.Add(r);
 
+        if (!string.IsNullOrEmpty(query)
+            && _settings.FileJumpPickerEverythingFolderSearch
+            && string.Equals(query, _everythingPathsValidForQuery, StringComparison.OrdinalIgnoreCase)
+            && _everythingFolderPaths.Count > 0)
+        {
+            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in _displayRows)
+                seenPaths.Add(r.Path);
+
+            foreach (var p in _everythingFolderPaths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!seenPaths.Add(p)) continue;
+                _displayRows.Add(new FileJumpPickerRow("findx", p, false));
+            }
+        }
+
         AssignVisibleQuickIndices(0);
 
         UpdateSearchChrome();
         if (_displayRows.Count > 0)
         {
-            int sel = preferListIndex.HasValue
-                ? Math.Clamp(preferListIndex.Value, 0, _displayRows.Count - 1)
-                : 0;
+            int sel = 0;
+            if (!string.IsNullOrEmpty(keepPath))
+            {
+                var i = _displayRows.ToList().FindIndex(r =>
+                    string.Equals(r.Path, keepPath, StringComparison.OrdinalIgnoreCase));
+                if (i >= 0) sel = i;
+                else if (preferListIndex.HasValue)
+                    sel = Math.Clamp(preferListIndex.Value, 0, _displayRows.Count - 1);
+            }
+            else if (preferListIndex.HasValue)
+                sel = Math.Clamp(preferListIndex.Value, 0, _displayRows.Count - 1);
+
             ItemsList.SelectedIndex = sel;
             ItemsList.ScrollIntoView(ItemsList.SelectedItem);
         }
+
+        if (!string.IsNullOrEmpty(query) && _settings.FileJumpPickerEverythingFolderSearch)
+            ScheduleEverythingFolderQuery(query);
+    }
+
+    private void ScheduleEverythingFolderQuery(string queryForSchedule)
+    {
+        if (!_settings.FileJumpPickerEverythingFolderSearch || string.IsNullOrEmpty(queryForSchedule))
+        {
+            _everythingQueryCts?.Cancel();
+            return;
+        }
+
+        if (string.Equals(queryForSchedule, _everythingPathsValidForQuery, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _everythingQueryGen++;
+        var gen = _everythingQueryGen;
+        _everythingQueryCts?.Cancel();
+        _everythingQueryCts = new CancellationTokenSource();
+        var tok = _everythingQueryCts.Token;
+        var maxResults = Math.Clamp(_settings.ExplorerEverythingQuickFindMaxResults, 1, 2000);
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (tok.WaitHandle.WaitOne(140)) return;
+                if (gen != _everythingQueryGen) return;
+
+                var list = new List<string>();
+                var ok = EverythingIpc.TryQueryFolderPaths(queryForSchedule, maxResults, list, out _);
+
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (gen != _everythingQueryGen) return;
+                    if (!string.Equals(_searchText.Trim(), queryForSchedule, StringComparison.Ordinal)) return;
+
+                    _everythingFolderPaths.Clear();
+                    if (ok)
+                        _everythingFolderPaths.AddRange(list);
+                    _everythingPathsValidForQuery = queryForSchedule;
+
+                    var pathKeep = (ItemsList.SelectedItem as FileJumpPickerRow)?.Path;
+                    RefreshFilter(preferPath: pathKeep);
+                }, DispatcherPriority.Background);
+            }
+            catch
+            {
+                /* ignore */
+            }
+        });
     }
 
     private void AssignVisibleQuickIndices(int firstVisible)
@@ -569,7 +678,20 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         var m = PanelModifierDisplayName(_settings.PanelModifierKey);
         FooterHintsText.Text =
-            $"{m}+1~9 跳转 · ↑↓ 选择 · ←→ 翻页 · 单击或 Enter 确认 · Tab · 字母搜索 · 右键收藏 · Esc 取消/清搜索";
+            $"{m}+1~9 跳转 · ↑↓ 选择 · ←→ 翻页 · Tab · 字母 findx · 右键收藏 · Esc 取消/清除";
+    }
+
+    private void FindxGitHub_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        try
+        {
+            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch
+        {
+            /* ignore */
+        }
     }
 
     private static string PanelModifierDisplayName(string key) => key switch
@@ -616,7 +738,8 @@ public partial class FileDialogJumpPickerWindow : Window
             var helper = new WindowInteropHelper(this);
             helper.EnsureHandle();
             _hwnd = helper.Handle;
-            if (_fileDialogOwnerHwnd != IntPtr.Zero)
+            // 粘性贴靠模式若设为文件对话框的 Owned 窗口，系统常把前台/键盘留在宿主对话框，SetForeground 难以生效；本窗已 Topmost。
+            if (_fileDialogOwnerHwnd != IntPtr.Zero && !_autoForegroundStickyMode)
                 helper.Owner = _fileDialogOwnerHwnd;
 
             HwndSource.FromHwnd(_hwnd)?.AddHook(JumpPickerWndProc);
@@ -655,14 +778,15 @@ public partial class FileDialogJumpPickerWindow : Window
         return IntPtr.Zero;
     }
 
-    private void ApplyPendingPhysicalSetWindowPos()
+    private void ApplyPendingPhysicalSetWindowPos(bool noActivate = true)
     {
         if (_hwnd == IntPtr.Zero) return;
         _isOurSetWindowPosForPicker = true;
         try
         {
-            Win32.SetWindowPos(_hwnd, IntPtr.Zero, _pendingPhysX, _pendingPhysY, 0, 0,
-                Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+            var flags = Win32.SWP_NOSIZE | Win32.SWP_NOZORDER;
+            if (noActivate) flags |= Win32.SWP_NOACTIVATE;
+            Win32.SetWindowPos(_hwnd, IntPtr.Zero, _pendingPhysX, _pendingPhysY, 0, 0, flags);
         }
         finally
         {
@@ -679,7 +803,8 @@ public partial class FileDialogJumpPickerWindow : Window
         {
             UpdateLayout();
             ComputePhysicalPosition(useActualSize: true);
-            ApplyPendingPhysicalSetWindowPos();
+            // 首次布局完成：允许 SetWindowPos 顺带激活，避免 SWP_NOACTIVATE 与「Owned 子窗」叠加导致永远无法抢前台。
+            ApplyPendingPhysicalSetWindowPos(noActivate: false);
             ApplyPendingPhysicalAsWpfLeftTop();
         }
         catch { /* ignore */ }
@@ -697,9 +822,9 @@ public partial class FileDialogJumpPickerWindow : Window
             _dockFollowTimer.Tick += (_, _) => DockFollowTick();
             _dockFollowTimer.Start();
         }
-        // 与 Activated 一致：粘性自动前台模式不抢焦点，避免与 WPS/Qt 地址栏导航抢前台形成反复全选+粘贴
-        if (!_autoForegroundStickyMode)
-            Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
+        // 弹出后聚焦列表，字母键才能进 findx 筛选；焦点回到文件对话框编辑框时仍由 KeyboardFocusIsExternalEditable 把按键让给对话框。
+        Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
+        Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.ApplicationIdle);
     }
 
     private void DockFollowTick()
@@ -846,7 +971,7 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         if (ItemsList.SelectedItem is not FileJumpPickerRow row || row.IsFavorite) return;
         var def = GuessPhraseFromPath(row.Path);
-        var phrase = PromptSimpleText("收藏关键词（用于搜索）", def);
+        var phrase = PromptSimpleText("收藏关键词（用于 findx 筛选）", def);
         if (phrase == null) return;
         phrase = phrase.Trim();
         if (string.IsNullOrEmpty(phrase)) phrase = def;

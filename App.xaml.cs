@@ -501,6 +501,7 @@ public partial class App : Application
 #if CLIPX_FILEJUMP
             _settings.ExplorerEverythingQuickFindEnabled = copy.ExplorerEverythingQuickFindEnabled;
             _settings.ExplorerEverythingQuickFindMaxResults = copy.ExplorerEverythingQuickFindMaxResults;
+            _settings.FileJumpPickerEverythingFolderSearch = copy.FileJumpPickerEverythingFolderSearch;
             SyncExplorerQuickFindHook();
 #endif
             StartupRegistration.Apply(_settings.RunAtStartup, _settings.RunAsAdministrator);

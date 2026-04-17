@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -89,7 +90,11 @@ internal static class FileManagerPathCollector
     }
 
     /// <summary>按 Z 序遍历顶层窗口，收集各文件管理器当前路径；末尾可附加「记忆路径」。</summary>
-    public static List<FileJumpCandidate> CollectCandidates(IntPtr dialogHwnd, string? memoryFolder, int zDelta = 2)
+    /// <param name="skipAlternateUiAutomation">为 true 时跳过白名单第三方管理器的 UIA 树扫描（可快一个数量级），用于先弹出跳转列表再异步补全。</param>
+    /// <param name="stopAfterCandidateCount">大于 0 时，在「去重后的候选条数」达到该值后不再遍历剩余顶层窗口（用于快速先开列表，完整列表由后续全量采集补全）。</param>
+    /// <param name="shouldAbort">若返回 true 则立即停止顶层窗口遍历（用于采集世代过期时中止长循环）。</param>
+    public static List<FileJumpCandidate> CollectCandidates(IntPtr dialogHwnd, string? memoryFolder, int zDelta = 2,
+        bool skipAlternateUiAutomation = false, int stopAfterCandidateCount = 0, Func<bool>? shouldAbort = null)
     {
         var exeByPid = new Dictionary<uint, string>();
         var list = new List<FileJumpCandidate>();
@@ -111,9 +116,27 @@ internal static class FileManagerPathCollector
         if (TryGetZOrderLinkedFolder(dialogHwnd, zDelta) is { } zHint)
             Add("Z 序推测", zHint);
 
-        string? opusXml = null;
-        foreach (var h in GetTopLevelZOrderTopFirst())
+        if (stopAfterCandidateCount > 0 && list.Count >= stopAfterCandidateCount)
         {
+            if (!string.IsNullOrWhiteSpace(memoryFolder))
+                Add("记忆路径", memoryFolder);
+            return list;
+        }
+
+        var topLevel = GetTopLevelZOrderTopFirst();
+        var scanCap = topLevel.Count;
+        if (stopAfterCandidateCount > 0)
+            scanCap = Math.Min(scanCap, 72);
+
+        List<ShellExplorerWindowEntry>? shellExplorerEntries = null;
+
+        string? opusXml = null;
+        for (var wi = 0; wi < scanCap; wi++)
+        {
+            if (shouldAbort?.Invoke() == true)
+                break;
+
+            var h = topLevel[wi];
             var cls = Win32.GetWindowClassName(h);
             switch (cls)
             {
@@ -136,10 +159,15 @@ internal static class FileManagerPathCollector
                     break;
                 case "CabinetWClass":
                 case "ExploreWClass":
-                    if (TryGetExplorerPathForHwnd(h) is { } ex)
+                {
+                    shellExplorerEntries ??= TryEnumerateShellExplorerWindows();
+
+                    if (TryGetExplorerPathForHwnd(h, shellExplorerEntries) is { } ex)
                         Add("资源管理器", ex);
                     break;
+                }
                 default:
+                    if (skipAlternateUiAutomation) break;
                     if (!TryGetProcessImagePath(h, exeByPid, out var altExe)) break;
                     {
                         var altProc = Path.GetFileNameWithoutExtension(altExe);
@@ -155,6 +183,9 @@ internal static class FileManagerPathCollector
                     }
                     break;
             }
+
+            if (stopAfterCandidateCount > 0 && list.Count >= stopAfterCandidateCount)
+                break;
         }
 
         if (!string.IsNullOrWhiteSpace(memoryFolder))
@@ -483,80 +514,118 @@ internal static class FileManagerPathCollector
         }
     }
 
-    /// <summary>
-    /// 通过 Shell.Application.Windows 取资源管理器路径；COM 失败时 UIA 与「文件夹跳转」读取对话框当前目录同源：
-    /// <see cref="FileDialogJumpHelper.TryReadCurrentFolder(System.IntPtr,out string,bool)"/>（<c>relaxed: true</c>）。
-    /// </summary>
-    private static string? TryGetExplorerPathForHwnd(IntPtr explorerFrameHwnd)
+    /// <summary>单次 <see cref="CollectCandidates"/> 内复用：避免每个资源管理器窗口都全量遍历 Shell.Application.Windows。</summary>
+    private readonly struct ShellExplorerWindowEntry
     {
-        if (explorerFrameHwnd == IntPtr.Zero) return null;
+        public ShellExplorerWindowEntry(IntPtr reportedHwnd, string path)
+        {
+            ReportedHwnd = reportedHwnd;
+            Path = path;
+        }
+
+        public IntPtr ReportedHwnd { get; }
+        public string Path { get; }
+    }
+
+    private static List<ShellExplorerWindowEntry> TryEnumerateShellExplorerWindows()
+    {
+        var r = new List<ShellExplorerWindowEntry>();
         Type? t = Type.GetTypeFromProgID("Shell.Application");
         object? shell = null;
         object? windows = null;
-        string? comPath = null;
         try
         {
-            if (t != null)
+            if (t == null) return r;
+            shell = Activator.CreateInstance(t);
+            if (shell == null) return r;
+            windows = TryInvokeShellWindows(shell);
+            if (windows == null) return r;
+            var wt = windows.GetType();
+            var countObj = wt.InvokeMember("Count", BindingFlags.GetProperty, null, windows, null);
+            var count = Convert.ToInt32(countObj);
+            for (var i = 0; i < count; i++)
             {
-                shell = Activator.CreateInstance(t);
-                if (shell != null)
+                object? win = null;
+                try
                 {
-                    windows = TryInvokeShellWindows(shell);
-                    if (windows != null)
-                    {
-                        var wt = windows.GetType();
-                        var countObj = wt.InvokeMember("Count", BindingFlags.GetProperty, null, windows, null);
-                        var count = Convert.ToInt32(countObj);
-                        var bestScore = int.MinValue;
-                        for (var i = 0; i < count; i++)
-                        {
-                            object? win = null;
-                            try
-                            {
-                                win = wt.InvokeMember("Item", BindingFlags.InvokeMethod, null, windows, new object[] { i });
-                                if (win == null) continue;
-                                var comHwnd = TryGetInternetExplorerHwnd(win);
-                                var score = ExplorerComMatchScore(explorerFrameHwnd, comHwnd);
-                                if (score < 0 || score < bestScore) continue;
-                                var path = ReadShellWindowPath(win);
-                                if (string.IsNullOrEmpty(path)) continue;
-                                if (score > bestScore)
-                                {
-                                    bestScore = score;
-                                    comPath = path;
-                                }
-                                // Win11 多标签/多 Shell 项可能同分：原先只保留首个，易留下另一标签的 C:\ 等错误路径。
-                                else if (score == bestScore
-                                         && (string.IsNullOrEmpty(comPath) || path.Length > comPath!.Length))
-                                {
-                                    comPath = path;
-                                }
-                            }
-                            finally
-                            {
-                                if (win != null) Marshal.ReleaseComObject(win);
-                            }
-                        }
-                    }
+                    win = wt.InvokeMember("Item", BindingFlags.InvokeMethod, null, windows, new object[] { i });
+                    if (win == null) continue;
+                    var comHwnd = TryGetInternetExplorerHwnd(win);
+                    var path = ReadShellWindowPath(win);
+                    if (string.IsNullOrEmpty(path)) continue;
+                    r.Add(new ShellExplorerWindowEntry(comHwnd, path));
+                }
+                finally
+                {
+                    if (win != null) Marshal.ReleaseComObject(win);
                 }
             }
         }
-        catch { /* COM 失败时仍可与 UIA 合并 */ }
+        catch { /* COM 失败 */ }
         finally
         {
             if (windows != null) Marshal.ReleaseComObject(windows);
             if (shell != null) Marshal.ReleaseComObject(shell);
         }
 
-        string? uiaPath = null;
-        // 旧逻辑 COM 成功即 return，从不会扫 Cabinet；合并后每次都跑 UIA。Win11 上偶发 ElementNotAvailable 等会中断整段，导致即使有 COM 路径弹窗也起不来。
-        try
+        return r;
+    }
+
+    /// <returns>最佳 COM 路径与对应匹配分；无有效项时 bestScore 为 <see cref="int.MinValue"/>。</returns>
+    private static (string? path, int bestScore) MatchBestComPathForExplorerFrameWithScore(IntPtr explorerFrameHwnd,
+        List<ShellExplorerWindowEntry> entries)
+    {
+        if (entries.Count == 0) return (null, int.MinValue);
+        var bestScore = int.MinValue;
+        string? comPath = null;
+        foreach (var e in entries)
         {
-            if (FileDialogJumpHelper.TryReadCurrentFolder(explorerFrameHwnd, out var jumpStyle, relaxed: true)
-                && !string.IsNullOrEmpty(jumpStyle))
-                uiaPath = jumpStyle;
+            var score = ExplorerComMatchScore(explorerFrameHwnd, e.ReportedHwnd);
+            if (score < 0 || score < bestScore) continue;
+            if (string.IsNullOrEmpty(e.Path)) continue;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                comPath = e.Path;
+            }
+            else if (score == bestScore
+                     && (string.IsNullOrEmpty(comPath) || e.Path.Length > comPath!.Length))
+            {
+                comPath = e.Path;
+            }
         }
-        catch { /* ignore */ }
+
+        return (comPath, bestScore);
+    }
+
+    /// <summary>
+    /// 通过 Shell.Application.Windows 取资源管理器路径；必要时用 UIA 与 COM 合并（Win11 多标签等）。
+    /// </summary>
+    /// <param name="prebuiltShellEntries">非 null 时复用已枚举的 Shell 窗口（同一次 CollectCandidates 内多次 Cabinet 窗口只需一次 COM 全量扫描）。</param>
+    private static string? TryGetExplorerPathForHwnd(IntPtr explorerFrameHwnd,
+        List<ShellExplorerWindowEntry>? prebuiltShellEntries = null)
+    {
+        if (explorerFrameHwnd == IntPtr.Zero) return null;
+        var (comPath, comMatchScore) = prebuiltShellEntries != null
+            ? MatchBestComPathForExplorerFrameWithScore(explorerFrameHwnd, prebuiltShellEntries)
+            : MatchBestComPathForExplorerFrameWithScore(explorerFrameHwnd, TryEnumerateShellExplorerWindows());
+
+        string? uiaPath = null;
+        // Shell COM 快而 relaxed UIA 对 Explorer（Classify=None）可走满 500 节点 BFS；多窗叠加易达秒级。
+        // COM 与 Shell 窗口 HWND 完全一致（分=4）时再扫整树多为重复。
+        if (comPath == null || comMatchScore < 4)
+        {
+            var relaxedUia = comPath == null;
+            if (comPath != null && comMatchScore < 4)
+                relaxedUia = false;
+            try
+            {
+                if (FileDialogJumpHelper.TryReadCurrentFolder(explorerFrameHwnd, out var jumpStyle, relaxed: relaxedUia)
+                    && !string.IsNullOrEmpty(jumpStyle))
+                    uiaPath = jumpStyle;
+            }
+            catch { /* ignore */ }
+        }
 
         // Shell.Document 与前台地址栏在 Win11 上可能不一致；曾提早 return comPath 导致界面在 D:\gn 仍显示 C:\。
         try

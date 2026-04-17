@@ -576,6 +576,13 @@
                         <TextBlock FontSize="13" Foreground="{DynamicResource PrimaryText}" TextWrapping="Wrap"
                                    Text="{StaticResource FolderJumpHelp_Delay_Body}" />
                     </ToolTip>
+                    <sys:String x:Key="FolderJumpHelp_EverythingFolder_Body">在跳转列表内输入检索时，除收藏与候选路径外，再用 findx（基于 voidtools Everything）补充匹配的文件夹并追加显示（来源标签为 findx）。需本机已安装并运行 Everything；单次最大条数与「实验性功能」页中 findx 筛选条数相同。</sys:String>
+                    <ToolTip x:Key="FolderJumpTipEverythingFolder" x:Shared="False" MaxWidth="420" Padding="10,8"
+                             Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource ThemeBorder}"
+                             BorderThickness="1">
+                        <TextBlock FontSize="13" Foreground="{DynamicResource PrimaryText}" TextWrapping="Wrap"
+                                   Text="{StaticResource FolderJumpHelp_EverythingFolder_Body}" />
+                    </ToolTip>
                 </TabItem.Resources>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,4,0,0"
                               ToolTipService.InitialShowDelay="0"
@@ -585,6 +592,8 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="14" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="10" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="10" />
                             <RowDefinition Height="Auto" />
@@ -741,6 +750,22 @@
                             <TextBlock x:Name="FileJumpAutoSyncText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
                                        HorizontalAlignment="Center" />
                         </Border>
+
+                        <StackPanel Grid.Row="18" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Background="Transparent" Padding="0,4" ToolTip="{StaticResource FolderJumpTipEverythingFolder}">
+                                <TextBlock Text="findx 补充文件夹" Foreground="{DynamicResource PrimaryText}" FontSize="14" />
+                            </Border>
+                            <Label Content="?" Style="{StaticResource FolderJumpHelpGlyphLabel}"
+                                   ToolTip="{StaticResource FolderJumpTipEverythingFolder}" />
+                        </StackPanel>
+                        <Border Grid.Row="18" Grid.Column="1" HorizontalAlignment="Right" Width="140"
+                                Background="{DynamicResource SurfaceBrush}" CornerRadius="4" Padding="10,7"
+                                BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                Cursor="Hand" MouseLeftButtonUp="FileJumpEverythingFolderCycle_Click"
+                                ToolTip="{StaticResource FolderJumpTipEverythingFolder}">
+                            <TextBlock x:Name="FileJumpEverythingFolderText" Foreground="{DynamicResource PrimaryText}" FontSize="14"
+                                       HorizontalAlignment="Center" />
+                        </Border>
                     </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -765,7 +790,7 @@
                         <Setter Property="ToolTipService.BetweenShowDelay" Value="0" />
                     </Style>
                     <sys:String x:Key="ExperimentalFeaturesIntro">下列功能依赖外部组件或全局键盘钩子等，可能与部分环境不兼容。默认关闭，确认需要后再开启。</sys:String>
-                    <sys:String x:Key="ExperimentalExplorerEv_Body">在系统资源管理器、焦点不在地址栏/搜索框时，直接键入字符：用 Everything 将结果限定在当前文件夹（含子文件夹），小窗列出匹配项；Enter 在资源管理器中定位选中项。需本机已安装并运行 Everything；依赖 Everything64.dll（通常随 Everything 安装）。</sys:String>
+                    <sys:String x:Key="ExperimentalExplorerEv_Body">在系统资源管理器、焦点不在地址栏/搜索框时，直接键入字符：用 findx（基于 voidtools Everything）将结果限定在当前文件夹（含子文件夹），小窗列出匹配项；Enter 在资源管理器中定位选中项。需本机已安装并运行 Everything；依赖 Everything64.dll（通常随 Everything 安装）。</sys:String>
                     <ToolTip x:Key="ExperimentalTipExplorerEv" x:Shared="False" MaxWidth="420" Padding="10,8"
                              Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource ThemeBorder}"
                              BorderThickness="1">
@@ -795,7 +820,7 @@
                                    FontSize="12" Opacity="0.85" TextWrapping="Wrap"
                                    Text="{StaticResource ExperimentalFeaturesIntro}" />
                         <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,2,0,0">
-                            <TextBlock Text="资源管理器 · Everything 筛选项" FontSize="18" FontWeight="SemiBold"
+                            <TextBlock Text="资源管理器 · findx 筛选项" FontSize="18" FontWeight="SemiBold"
                                        Foreground="{DynamicResource PrimaryText}" />
                         </StackPanel>
                         <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
@@ -814,14 +839,14 @@
                                        HorizontalAlignment="Center" />
                         </Border>
                         <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border Background="Transparent" Padding="0,4" ToolTip="Everything IPC 单次最多返回条数（1～2000）。">
+                            <Border Background="Transparent" Padding="0,4" ToolTip="findx（Everything IPC）单次最多返回条数（1～2000）。">
                                 <TextBlock Text="筛选最大条数" Foreground="{DynamicResource PrimaryText}" FontSize="14" />
                             </Border>
                         </StackPanel>
                         <TextBox x:Name="ExplorerEverythingMaxResultsBox" Grid.Row="6" Grid.Column="1"
                                  HorizontalAlignment="Right" Width="140"
                                  FontSize="14" Padding="8,6"
-                                 ToolTip="Everything IPC 单次最多返回条数（1～2000）。"
+                                 ToolTip="findx（Everything IPC）单次最多返回条数（1～2000）。"
                                  Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource PrimaryText}"
                                  BorderBrush="{DynamicResource ThemeBorder}" CaretBrush="{DynamicResource PrimaryText}" />
                     </Grid>

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -472,27 +473,81 @@ public sealed class ExplorerQuickFindController : IDisposable
             if (tok.WaitHandle.WaitOne(120)) return;
             if (gen != _queryGen) return;
 
-            List<QuickFindResultItem>? items = null;
-            string? status = null;
+            // Everything IPC 为进程内全局状态；两次 Query 须在同一把锁内完成，避免与跳转列表等其它 IPC 交错。
+            var scopedSearch = BuildEverythingSearch(folder, typing);
+            var scopedPaths = new List<string>();
+            List<string>? globalPaths = null;
+            var okScoped = false;
+            var errScoped = 0;
+            var okGlobal = true;
+            var errGlobal = 0;
+            EverythingIpc.InvokeExclusive(() =>
+            {
+                okScoped = EverythingIpc.TryQueryFullPathsCore(scopedSearch, maxResults, scopedPaths, out errScoped);
+                if (!string.IsNullOrWhiteSpace(typing))
+                {
+                    globalPaths = new List<string>();
+                    okGlobal = EverythingIpc.TryQueryFullPathsCore(typing.Trim(), maxResults, globalPaths!, out errGlobal);
+                }
+            });
 
-            var search = BuildEverythingSearch(folder, typing);
-            var rawPaths = new List<string>();
-            var ok = EverythingIpc.TryQueryFullPaths(search, maxResults, rawPaths, out var err);
             if (tok.IsCancellationRequested || gen != _queryGen) return;
 
-            if (!ok)
-                status = FormatError(err);
-            else if (rawPaths.Count == 0)
-                status = "无匹配项";
+            List<QuickFindResultItem> items;
+            string? status = null;
+            string? countLine = null;
+
+            var hasGlobalPass = !string.IsNullOrWhiteSpace(typing);
+
+            if (!okScoped && (!hasGlobalPass || !okGlobal))
+            {
+                items = new List<QuickFindResultItem>();
+                status = FormatError(errScoped);
+            }
+            else if (!okScoped && hasGlobalPass && okGlobal && globalPaths != null)
+            {
+                items = QuickFindResultItem.FromScopedAndGlobalLists(Array.Empty<string>(), globalPaths, folder, maxResults);
+                status = "当前目录检索失败，仅显示全盘";
+                countLine = items.Count > 0 ? $"{items.Count} 项（全盘）" : "";
+            }
+            else if (okScoped && !hasGlobalPass)
+            {
+                items = QuickFindResultItem.FromFullPaths(scopedPaths, folder);
+                if (items.Count == 0) status = "无匹配项";
+            }
+            else if (okScoped && hasGlobalPass && !okGlobal)
+            {
+                items = QuickFindResultItem.FromFullPaths(scopedPaths, folder);
+                if (items.Count == 0) status = "无匹配项";
+                else
+                    status = $"全盘检索不可用（{FormatError(errGlobal)}）";
+            }
+            else if (okScoped && hasGlobalPass && okGlobal && globalPaths != null)
+            {
+                items = QuickFindResultItem.FromScopedAndGlobalLists(scopedPaths, globalPaths, folder, maxResults);
+                if (items.Count == 0)
+                    status = "无匹配项";
+                else
+                {
+                    var nGlob = items.Count(x => x.IsGlobalMatch);
+                    var nScoped = items.Count - nGlob;
+                    countLine = nGlob > 0
+                        ? $"共 {items.Count} 项（当前目录 {nScoped} · 全盘 {nGlob}）"
+                        : $"{items.Count} 项";
+                }
+            }
             else
-                items = QuickFindResultItem.FromFullPaths(rawPaths, folder);
+            {
+                items = new List<QuickFindResultItem>();
+                status = "无匹配项";
+            }
 
             if (tok.IsCancellationRequested || gen != _queryGen) return;
 
             _dispatcher.BeginInvoke(() =>
             {
                 if (gen != _queryGen || !_session || _window == null) return;
-                _window.SetResults(items ?? new List<QuickFindResultItem>(), status);
+                _window.SetResults(items, status, countLine);
                 _window.SetQueryText(_sessionFolderDisplay, _typing);
             }, DispatcherPriority.Background);
         }, tok);
@@ -507,15 +562,31 @@ public sealed class ExplorerQuickFindController : IDisposable
         return fullPath;
     }
 
+    /// <summary>
+    /// 构造 Everything 搜索串。实测通过 IPC：<c>C:\ pp</c> 无论是否 SetMatchPath 均为 0 条；
+    /// 须使用 <c>parent:"盘符路径\"</c> 限定父目录，再跟关键词（与官方搜索语法一致）。
+    /// </summary>
     private static string BuildEverythingSearch(string folder, string typing)
     {
-        var f = folder.Trim().TrimEnd('\\');
-        if (f.Length == 0) return typing;
+        var f = folder.Trim().TrimEnd('\\', '/');
+        if (f.Length == 0) return typing.Trim();
         try { f = Path.GetFullPath(f); } catch { /* keep as-is */ }
         if (!f.EndsWith('\\')) f += "\\";
 
-        var pathToken = f.Contains(' ') ? "\"" + f + "\"" : f;
-        return string.IsNullOrWhiteSpace(typing) ? f.TrimEnd('\\') : pathToken + " " + typing.Trim();
+        var parentToken = "parent:" + QuotePathForEverythingParent(f);
+
+        if (string.IsNullOrWhiteSpace(typing))
+            return parentToken;
+
+        return parentToken + " " + typing.Trim();
+    }
+
+    /// <summary>路径含空格时 parent: 须用双引号包住（保留末尾反斜杠）。</summary>
+    private static string QuotePathForEverythingParent(string pathWithTrailingSlash)
+    {
+        if (pathWithTrailingSlash.IndexOf(' ', StringComparison.Ordinal) >= 0)
+            return "\"" + pathWithTrailingSlash + "\"";
+        return pathWithTrailingSlash;
     }
 
     // ===================== 就地导航 + 选中 =====================

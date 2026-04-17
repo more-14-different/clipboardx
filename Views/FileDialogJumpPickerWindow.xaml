@@ -118,8 +118,22 @@
 
                 <Border Grid.Row="5" Padding="14,8" Background="{DynamicResource FooterBrush}"
                         CornerRadius="0,0,12,12">
-                    <TextBlock x:Name="FooterHintsText" Foreground="{DynamicResource MutedText}" FontSize="10"
-                               HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="FooterHintsText" Grid.Column="0" Foreground="{DynamicResource MutedText}" FontSize="10"
+                                   HorizontalAlignment="Left" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                   TextAlignment="Left" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Grid.Column="1" FontSize="10" VerticalAlignment="Center" TextWrapping="NoWrap">
+                            <Run Text="findx · 秒搜本地 " Foreground="{DynamicResource MutedText}"/>
+                            <Hyperlink NavigateUri="https://github.com/chaojimct/findx" RequestNavigate="FindxGitHub_RequestNavigate"
+                                       TextDecorations="None" Foreground="{DynamicResource AccentBg}">
+                                GitHub
+                            </Hyperlink>
+                        </TextBlock>
+                    </Grid>
                 </Border>
             </Grid>
         </Border>

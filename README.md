@@ -238,7 +238,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ```powershell
 # 在仓库根目录执行
-$v = "1.3.6"   # 与 csproj 同步后改这里
+$v = "1.4.0"   # 与 csproj 同步后改这里
 Set-ExecutionPolicy -Scope Process -Bypass -Force
 .\native\ShellNavigate\build.ps1
 
@@ -299,9 +299,12 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 结构化列表见 **[CHANGELOG.md](CHANGELOG.md)**（推送 `v*` 标签后，GitHub Release 会从中截取当前版本的 **更新内容**）。以下为 README 内便于浏览的摘录；安装包见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**。
 
-### 未发布（见 CHANGELOG [Unreleased]）
+### v1.4.0
 
-- **文件跳转 · 资源管理器**：**实验性功能** 中可开启「当前文件夹内键入筛选」，依赖 **Everything** 与 **`Everything64.dll`**；详见上文「资源管理器内 Everything 筛选」
+- **文件对话框跳转 · 性能**：同轮采集中 **Shell.Windows** 只枚举一次；**COM 与 HWND 精确匹配** 时跳过资源管理器整窗 **relaxed UIA**；**跳转列表延时为 0** 时防抖 **80ms**
+- **文件对话框跳转 · findx**：补充路径来源、底栏与设置等 **findx** 文案与 **GitHub** 链接；底栏快捷键单行展示
+- **文件对话框跳转 · 焦点**：粘性贴靠模式下优化 **前台/焦点**（去 Owner、首帧允许激活、`SetForegroundWindowAggressive`），弹出后可直接键盘筛选
+- **实验性功能**：**当前文件夹内键入筛选** 默认 **开启**（旧配置缺字段时视为开启；需本机 **Everything**）
 
 ### v1.3.6
 

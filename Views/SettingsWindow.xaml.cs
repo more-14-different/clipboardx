@@ -32,6 +32,7 @@ public partial class SettingsWindow : Window
     private bool _pendingFileJumpOpenWhenDialogForeground = true;
     private bool _pendingFileJumpAutoOnFirstClick;
     private bool _pendingFileJumpAutoSyncOnReturn;
+    private bool _pendingFileJumpPickerEverythingFolderSearch = true;
 #if CLIPX_FILEJUMP
     private bool _pendingExplorerEverythingQuickFind;
 #endif
@@ -119,6 +120,9 @@ public partial class SettingsWindow : Window
 
         _pendingFileJumpAutoSyncOnReturn = settings.FileJumpAutoSyncOnReturn;
         FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
+
+        _pendingFileJumpPickerEverythingFolderSearch = settings.FileJumpPickerEverythingFolderSearch;
+        FileJumpEverythingFolderText.Text = _pendingFileJumpPickerEverythingFolderSearch ? "开启" : "关闭";
 
 #if CLIPX_FILEJUMP
         _pendingExplorerEverythingQuickFind = settings.ExplorerEverythingQuickFindEnabled;
@@ -608,6 +612,12 @@ public partial class SettingsWindow : Window
         FileJumpAutoSyncText.Text = _pendingFileJumpAutoSyncOnReturn ? "开启" : "关闭";
     }
 
+    private void FileJumpEverythingFolderCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingFileJumpPickerEverythingFolderSearch = !_pendingFileJumpPickerEverythingFolderSearch;
+        FileJumpEverythingFolderText.Text = _pendingFileJumpPickerEverythingFolderSearch ? "开启" : "关闭";
+    }
+
     private void ExplorerEverythingQuickFindCycle_Click(object sender, MouseButtonEventArgs e)
     {
 #if CLIPX_FILEJUMP
@@ -773,6 +783,7 @@ public partial class SettingsWindow : Window
         _settings.FileJumpPickerOpenWhenDialogForeground = _pendingFileJumpOpenWhenDialogForeground;
         _settings.FileJumpAutoOnFirstClick = _pendingFileJumpAutoOnFirstClick;
         _settings.FileJumpAutoSyncOnReturn = _pendingFileJumpAutoSyncOnReturn;
+        _settings.FileJumpPickerEverythingFolderSearch = _pendingFileJumpPickerEverythingFolderSearch;
 #if CLIPX_FILEJUMP
         _settings.ExplorerEverythingQuickFindEnabled = _pendingExplorerEverythingQuickFind;
         _settings.ExplorerEverythingQuickFindMaxResults = explorerEvMax;

@@ -119,11 +119,14 @@ public class AppSettings
     /// <summary>最近一次在「打开/保存」对话框中记录到的文件夹，供 Ctrl+G 跳转。</summary>
     public string LastFileDialogFolder { get; set; } = "";
 
-    /// <summary>资源管理器非地址栏焦点时直接键入：用 Everything 限定当前文件夹检索并弹出结果（需本机运行 Everything）。默认关闭，见设置「实验性功能」。</summary>
-    public bool ExplorerEverythingQuickFindEnabled { get; set; } = false;
+    /// <summary>资源管理器非地址栏焦点时直接键入：用 Everything 限定当前文件夹检索并弹出结果（需本机运行 Everything）。默认开启，见设置「实验性功能」。</summary>
+    public bool ExplorerEverythingQuickFindEnabled { get; set; } = true;
 
     /// <summary>Everything IPC 单次最大返回条数。</summary>
     public int ExplorerEverythingQuickFindMaxResults { get; set; } = 150;
+
+    /// <summary>文件对话框「跳转到文件夹」列表内检索时，用 Everything 补充匹配文件夹（需本机运行 Everything）。</summary>
+    public bool FileJumpPickerEverythingFolderSearch { get; set; } = true;
 
     /// <summary>已保留字段：配置仍可反序列化；当前版本始终走 Everything，保存设置时会写回 false。</summary>
     public bool UseFindXSearch { get; set; } = false;
@@ -240,6 +243,10 @@ public class AppSettings
                     }
                     if (!doc.RootElement.TryGetProperty(nameof(ExplorerEverythingQuickFindMaxResults), out _))
                         settings.ExplorerEverythingQuickFindMaxResults = 150;
+                    if (!doc.RootElement.TryGetProperty(nameof(ExplorerEverythingQuickFindEnabled), out _))
+                        settings.ExplorerEverythingQuickFindEnabled = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerEverythingFolderSearch), out _))
+                        settings.FileJumpPickerEverythingFolderSearch = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.PasteSimulationMode = PasteSimulationModes.Normalize(settings.PasteSimulationMode);
@@ -290,6 +297,10 @@ public class AppSettings
                     }
                     if (!doc.RootElement.TryGetProperty(nameof(ExplorerEverythingQuickFindMaxResults), out _))
                         settings.ExplorerEverythingQuickFindMaxResults = 150;
+                    if (!doc.RootElement.TryGetProperty(nameof(ExplorerEverythingQuickFindEnabled), out _))
+                        settings.ExplorerEverythingQuickFindEnabled = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(FileJumpPickerEverythingFolderSearch), out _))
+                        settings.FileJumpPickerEverythingFolderSearch = true;
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
                     settings.PasteSimulationMode = PasteSimulationModes.Normalize(settings.PasteSimulationMode);
@@ -356,6 +367,7 @@ public class AppSettings
         LastFileDialogFolder = LastFileDialogFolder,
         ExplorerEverythingQuickFindEnabled = ExplorerEverythingQuickFindEnabled,
         ExplorerEverythingQuickFindMaxResults = ExplorerEverythingQuickFindMaxResults,
+        FileJumpPickerEverythingFolderSearch = FileJumpPickerEverythingFolderSearch,
         UseFindXSearch = UseFindXSearch
     };
 }
