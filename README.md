@@ -299,6 +299,10 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 结构化列表见 **[CHANGELOG.md](CHANGELOG.md)**（推送 `v*` 标签后，GitHub Release 会从中截取当前版本的 **更新内容**）。以下为 README 内便于浏览的摘录；安装包见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**。
 
+### 未发布（见 CHANGELOG [Unreleased]）
+
+- **文件跳转 · 资源管理器**：**实验性功能** 中可开启「当前文件夹内键入筛选」，依赖 **Everything** 与 **`Everything64.dll`**；详见上文「资源管理器内 Everything 筛选」
+
 ### v1.3.6
 
 - **剪贴板 · 粘贴模式**：设置中可选向目标窗口模拟 **Ctrl+V** 或 **Shift+Insert**（默认 Ctrl+V）；检测到**命令行/终端**目标且当前为 Ctrl+V 时，**临时**改用 Shift+Insert（不改保存项）
