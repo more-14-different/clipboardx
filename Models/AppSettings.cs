@@ -62,7 +62,10 @@ public class AppSettings
     public bool RunAtStartup { get; set; } = true;
 
     /// <summary>为 true 时，每次手动启动或开机自启均请求 UAC 以管理员身份运行（用户取消则退回普通权限）。</summary>
-    public bool RunAsAdministrator { get; set; }
+    public bool RunAsAdministrator { get; set; } = true;
+
+    /// <summary>向目标窗口模拟粘贴：<see cref="PasteSimulationModes.CtrlV"/>（Ctrl+V）或 <see cref="PasteSimulationModes.ShiftInsert"/>。</summary>
+    public string PasteSimulationMode { get; set; } = PasteSimulationModes.CtrlV;
 
     /// <summary>启动后静默访问 GitHub Releases，若有新版本则在托盘气泡提示（不弹阻断窗）。</summary>
     public bool CheckUpdatesOnStartup { get; set; } = true;
@@ -194,6 +197,8 @@ public class AppSettings
                     // 旧版 settings.json 无此字段时 Json 反序列化为 false，产品默认应为开启
                     if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
                         settings.RunAtStartup = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(RunAsAdministrator), out _))
+                        settings.RunAsAdministrator = true;
                     if (!doc.RootElement.TryGetProperty(nameof(EnableShellNavigateInject), out _))
                         settings.EnableShellNavigateInject = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoOnFirstClick), out _))
@@ -226,6 +231,7 @@ public class AppSettings
                     }
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
+                    settings.PasteSimulationMode = PasteSimulationModes.Normalize(settings.PasteSimulationMode);
                     NormalizePopupPanelSettings(settings);
                     return settings;
                 }
@@ -239,6 +245,8 @@ public class AppSettings
                     var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new();
                     if (!doc.RootElement.TryGetProperty(nameof(RunAtStartup), out _))
                         settings.RunAtStartup = true;
+                    if (!doc.RootElement.TryGetProperty(nameof(RunAsAdministrator), out _))
+                        settings.RunAsAdministrator = true;
                     if (!doc.RootElement.TryGetProperty(nameof(EnableShellNavigateInject), out _))
                         settings.EnableShellNavigateInject = true;
                     if (!doc.RootElement.TryGetProperty(nameof(FileJumpAutoOnFirstClick), out _))
@@ -271,6 +279,7 @@ public class AppSettings
                     }
                     if (settings.FolderFavorites == null)
                         settings.FolderFavorites = new List<FolderFavoriteEntry>();
+                    settings.PasteSimulationMode = PasteSimulationModes.Normalize(settings.PasteSimulationMode);
                     NormalizePopupPanelSettings(settings);
                     settings.Save();
                     return settings;
@@ -312,6 +321,7 @@ public class AppSettings
         HideOnSameAppClick = HideOnSameAppClick,
         RunAtStartup = RunAtStartup,
         RunAsAdministrator = RunAsAdministrator,
+        PasteSimulationMode = PasteSimulationMode,
         CheckUpdatesOnStartup = CheckUpdatesOnStartup,
         LastStartupUpdateNotifiedTag = LastStartupUpdateNotifiedTag,
         PreviewMaxLines = PreviewMaxLines,

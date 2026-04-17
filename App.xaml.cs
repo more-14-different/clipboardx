@@ -447,8 +447,14 @@ public partial class App : Application
     private void OpenSettings()
     {
         var copy = _settings.ShallowCopy();
+        var prevRunAsAdministrator = _settings.RunAsAdministrator;
         var window = new SettingsWindow(copy);
         window.ClearHistoryRequested += () => _popup?.ClearHistory();
+        if (_popup != null)
+        {
+            window.Owner = _popup;
+            window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
         window.ShowDialog();
 
         if (window.DialogResult == true)
@@ -485,6 +491,7 @@ public partial class App : Application
             _settings.BatchModeCycleHotkeyKey = copy.BatchModeCycleHotkeyKey;
             _settings.BatchPasteMergeText = copy.BatchPasteMergeText;
             _settings.BatchQueueAutoSwitchToNormalAfterQueueDone = copy.BatchQueueAutoSwitchToNormalAfterQueueDone;
+            _settings.PasteSimulationMode = PasteSimulationModes.Normalize(copy.PasteSimulationMode);
             StartupRegistration.Apply(_settings.RunAtStartup, _settings.RunAsAdministrator);
             _settings.Save();
             _popup?.ApplySettings(_settings);
@@ -493,6 +500,22 @@ public partial class App : Application
 #endif
             UpdateTrayTooltip();
             RefreshTrayIcon();
+
+            if (prevRunAsAdministrator != copy.RunAsAdministrator)
+            {
+                var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
+                var elevated = ProcessElevation.IsCurrentProcessElevated();
+                var wantElevated = copy.RunAsAdministrator;
+                var restarted = wantElevated
+                    ? elevated
+                        ? ProcessElevation.TryStartSameExeCopy(args)
+                        : ProcessElevation.TryStartElevatedCopyAndExit(args)
+                    : elevated
+                        ? ProcessElevation.TryStartUnelevatedCopyAndExit(args)
+                        : ProcessElevation.TryStartSameExeCopy(args);
+                if (restarted)
+                    Shutdown();
+            }
         }
     }
 

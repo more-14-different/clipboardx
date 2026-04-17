@@ -4,6 +4,18 @@
 
 格式依据 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 的常见写法；日期为发布日（与 tag 推送日一致即可）。
 
+## [1.3.6] - 2026-04-16
+
+### 剪贴板 · 设置与粘贴
+
+- **粘贴到目标窗口**：可在设置中选择写入剪贴板后向目标窗口模拟 **Ctrl+V** 或 **Shift+Insert**（默认 Ctrl+V；`settings.json`：`PasteSimulationMode`）
+- **命令行 / 终端**：当配置为 Ctrl+V 时，若检测到粘贴目标为常见控制台或终端（如 `ConsoleWindowClass`、Windows Terminal 宿主类名，或 cmd、PowerShell、Windows Terminal、WSL、mintty 等进程），**临时**改用 **Shift+Insert**（不修改已保存的设置）
+
+### 设置与管理
+
+- **以管理员身份运行**：默认开启；在设置中切换该项并保存后，**自动重启**以匹配目标权限（UAC 提升、从已提升实例降权启动普通实例，或同权限下重启）
+- **设置窗口前置**：打开设置时指定 **Owner** 为剪贴板浮层（相对居中），并在加载后 **激活窗口 + 抢前台**，避免设置窗落在置顶剪贴板面板或其它应用之后
+
 ## [1.3.5] - 2026-04-15
 
 ### 剪贴板 · 设置与外观

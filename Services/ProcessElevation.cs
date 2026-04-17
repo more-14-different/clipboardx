@@ -53,6 +53,65 @@ public static class ProcessElevation
         }
     }
 
+    /// <summary>
+    /// 从<strong>已提升</strong>进程启动同一 exe 的非提升实例（常见为 <c>cmd /c start ""</c>），成功则返回 true（调用方应退出当前进程）。
+    /// </summary>
+    public static bool TryStartUnelevatedCopyAndExit(string[]? startupArgs)
+    {
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
+            return false;
+        if (exe.EndsWith("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        try
+        {
+            var argTail = startupArgs is { Length: > 0 }
+                ? " " + string.Join(" ", startupArgs.Select(EscapeArgumentForProcessStart))
+                : "";
+            var psi = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c start \"\" \"{exe}\"{argTail}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            using var p = Process.Start(psi);
+            return p != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>同路径、同参数再启动一实例（不请求 UAC），用于同权限下重启。</summary>
+    public static bool TryStartSameExeCopy(string[]? startupArgs)
+    {
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
+            return false;
+        if (exe.EndsWith("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe,
+                UseShellExecute = true
+            };
+            if (startupArgs is { Length: > 0 })
+                psi.Arguments = string.Join(" ", startupArgs.Select(EscapeArgumentForProcessStart));
+            using var p = Process.Start(psi);
+            return p != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string EscapeArgumentForProcessStart(string arg)
     {
         if (string.IsNullOrEmpty(arg)) return "\"\"";

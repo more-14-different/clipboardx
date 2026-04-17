@@ -1740,7 +1740,7 @@ public partial class PopupWindow : Window
             if (ok)
             {
                 await Task.Delay(14);
-                SendCtrlV();
+                SendPasteToTarget();
             }
 
             if (applyHistoryReorder)
@@ -4932,7 +4932,7 @@ public partial class PopupWindow : Window
             ClipboardDiagnosticsLog.Write($"paste unexpected before/during set {ex.GetType().Name}: {ex.Message}");
         }
 
-        ClipboardDiagnosticsLog.Write($"paste END clipboardOk={clipboardOk} willSendCtrlV={clipboardOk}");
+        ClipboardDiagnosticsLog.Write($"paste END clipboardOk={clipboardOk} willSendPaste={clipboardOk}");
 
         if (!clipboardOk)
             _isSettingClipboard = false;
@@ -4953,7 +4953,7 @@ public partial class PopupWindow : Window
                 await Task.Delay(prePasteDelayMs);
             }
 
-            SendCtrlV();
+            SendPasteToTarget();
 
             // 连续粘贴：整轮结束后再 TailSettle；段间另有 SequentialInterSegmentDelayMs。单次粘贴保留回波窗口。
             if (!noSegmentDelays)
@@ -4971,11 +4971,25 @@ public partial class PopupWindow : Window
         }
     }
 
+    /// <summary>按设置向目标窗口发送粘贴（Ctrl+V 或 Shift+Insert）。</summary>
+    private void SendPasteToTarget()
+    {
+        var mode = PasteSimulationModes.Normalize(_appSettings?.PasteSimulationMode);
+        // 命令行/终端对 Ctrl+V 支持不一，检测到则临时改用 Shift+Insert（不改保存的设置）。
+        if (mode == PasteSimulationModes.CtrlV && PasteTargetHeuristics.IsLikelyConsoleOrTerminal(_targetWindow))
+            mode = PasteSimulationModes.ShiftInsert;
+
+        if (mode == PasteSimulationModes.ShiftInsert)
+            SendShiftInsertPaste();
+        else
+            SendCtrlVPaste();
+    }
+
     // Shift+Insert 是系统级粘贴，但 Excel 对模拟输入更挑：
     // 1) Insert 必须按扩展键发送；
     // 2) 若呼出面板时 Ctrl/Alt/Win 仍处于按下态，最终组合键会被污染。
     // 因此这里在同一批 SendInput 中先释放当前真实按下的修饰键，再发送标准的 Shift+Insert。
-    private static void SendCtrlV()
+    private static void SendShiftInsertPaste()
     {
         var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
         var altHeld = (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0;
@@ -5030,6 +5044,83 @@ public partial class PopupWindow : Window
 
         inputs[i].type = Win32.INPUT_KEYBOARD;
         inputs[i].u.ki.wVk = Win32.VK_SHIFT;
+        inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+
+        Win32.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Win32.INPUT>());
+    }
+
+    /// <summary>先释放可能干扰的修饰键，再发送 Ctrl+V（避免呼出面板时 Shift 等仍按下导致「无格式粘贴」等）。</summary>
+    private static void SendCtrlVPaste()
+    {
+        var lShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0;
+        var rShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0;
+        var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
+        var altHeld = (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0;
+        var lWinHeld = (Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0;
+        var rWinHeld = (Win32.GetAsyncKeyState(Win32.VK_RWIN) & 0x8000) != 0;
+
+        var inputs = new Win32.INPUT[
+            (lShiftHeld ? 1 : 0) + (rShiftHeld ? 1 : 0) + (ctrlHeld ? 1 : 0) + (altHeld ? 1 : 0) + (lWinHeld ? 1 : 0) + (rWinHeld ? 1 : 0) + 4];
+        var i = 0;
+
+        if (lShiftHeld)
+        {
+            inputs[i].type = Win32.INPUT_KEYBOARD;
+            inputs[i].u.ki.wVk = Win32.VK_LSHIFT;
+            inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+            i++;
+        }
+        if (rShiftHeld)
+        {
+            inputs[i].type = Win32.INPUT_KEYBOARD;
+            inputs[i].u.ki.wVk = Win32.VK_RSHIFT;
+            inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+            i++;
+        }
+        if (ctrlHeld)
+        {
+            inputs[i].type = Win32.INPUT_KEYBOARD;
+            inputs[i].u.ki.wVk = Win32.VK_CONTROL;
+            inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+            i++;
+        }
+        if (altHeld)
+        {
+            inputs[i].type = Win32.INPUT_KEYBOARD;
+            inputs[i].u.ki.wVk = Win32.VK_MENU;
+            inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+            i++;
+        }
+        if (lWinHeld)
+        {
+            inputs[i].type = Win32.INPUT_KEYBOARD;
+            inputs[i].u.ki.wVk = Win32.VK_LWIN;
+            inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+            i++;
+        }
+        if (rWinHeld)
+        {
+            inputs[i].type = Win32.INPUT_KEYBOARD;
+            inputs[i].u.ki.wVk = Win32.VK_RWIN;
+            inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+            i++;
+        }
+
+        inputs[i].type = Win32.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = Win32.VK_CONTROL;
+        i++;
+
+        inputs[i].type = Win32.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = Win32.VK_V;
+        i++;
+
+        inputs[i].type = Win32.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = Win32.VK_V;
+        inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+        i++;
+
+        inputs[i].type = Win32.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = Win32.VK_CONTROL;
         inputs[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
 
         Win32.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Win32.INPUT>());
@@ -5099,7 +5190,7 @@ public partial class PopupWindow : Window
         if (clipboardOk)
         {
             await Task.Delay(60);
-            SendCtrlV();
+            SendPasteToTarget();
             await Task.Delay(600);
             ClipboardDiagnosticsLog.Write("pasteAsFile post-echo suppression window elapsed");
         }

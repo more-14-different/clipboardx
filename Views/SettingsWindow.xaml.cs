@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 
 namespace ClipboardManager;
@@ -40,6 +41,7 @@ public partial class SettingsWindow : Window
     private uint _pendingPageScrollDownKey;
     private bool _isRecordingPageScrollUpHotkey;
     private bool _isRecordingPageScrollDownHotkey;
+    private string _pendingPasteSimulationMode = PasteSimulationModes.CtrlV;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
 
@@ -129,6 +131,9 @@ public partial class SettingsWindow : Window
         _pendingModifierKey = settings.PanelModifierKey;
         ModifierText.Text = ModifierDisplayName(_pendingModifierKey);
 
+        _pendingPasteSimulationMode = PasteSimulationModes.Normalize(settings.PasteSimulationMode);
+        PasteSimulationText.Text = PasteSimulationDisplayName(_pendingPasteSimulationMode);
+
         _pendingBatchPasteMergeText = settings.BatchPasteMergeText;
         BatchPasteMergeToggleText.Text = _pendingBatchPasteMergeText ? "开启" : "关闭";
 
@@ -137,6 +142,7 @@ public partial class SettingsWindow : Window
 
         CustomFileDialogStore.RulesChanged += OnCustomFileDialogRulesChanged;
         Closed += SettingsWindow_OnClosed;
+        Loaded += SettingsWindow_OnLoaded;
         ReloadCustomFileDialogList();
         CustomRulesPathHint.Text = "存储文件：" + CustomFileDialogStore.PersistencePath;
     }
@@ -144,6 +150,23 @@ public partial class SettingsWindow : Window
     private void SettingsWindow_OnClosed(object? sender, EventArgs e)
     {
         CustomFileDialogStore.RulesChanged -= OnCustomFileDialogRulesChanged;
+    }
+
+    private void SettingsWindow_OnLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= SettingsWindow_OnLoaded;
+        // 托盘/置顶浮层场景下模态窗易落在 Z 序底层；延后到 Input 再夺前台。
+        Dispatcher.BeginInvoke(() =>
+        {
+            Activate();
+            try
+            {
+                var h = new WindowInteropHelper(this).Handle;
+                if (h != IntPtr.Zero)
+                    Win32.SetForegroundWindowAggressive(h);
+            }
+            catch { /* ignore */ }
+        }, DispatcherPriority.Input);
     }
 
     private void OnCustomFileDialogRulesChanged()
@@ -578,6 +601,17 @@ public partial class SettingsWindow : Window
         _ => "Ctrl",
     };
 
+    private static string PasteSimulationDisplayName(string m) =>
+        PasteSimulationModes.Normalize(m) == PasteSimulationModes.ShiftInsert ? "Shift+Insert" : "Ctrl+V";
+
+    private void PasteSimulationCycle_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingPasteSimulationMode = _pendingPasteSimulationMode == PasteSimulationModes.CtrlV
+            ? PasteSimulationModes.ShiftInsert
+            : PasteSimulationModes.CtrlV;
+        PasteSimulationText.Text = PasteSimulationDisplayName(_pendingPasteSimulationMode);
+    }
+
     private void ModifierCycle_Click(object sender, RoutedEventArgs e)
     {
         int idx = Array.IndexOf(ModifierOptions, _pendingModifierKey);
@@ -717,6 +751,7 @@ public partial class SettingsWindow : Window
         _settings.PanelPageScrollDownKey = _pendingPageScrollDownKey;
         AppSettings.NormalizePopupPanelSettings(_settings);
         _settings.PanelModifierKey = _pendingModifierKey;
+        _settings.PasteSimulationMode = PasteSimulationModes.Normalize(_pendingPasteSimulationMode);
         _settings.BatchPasteMergeText = _pendingBatchPasteMergeText;
         _settings.BatchQueueAutoSwitchToNormalAfterQueueDone = _pendingBatchQueueAutoSwitchToNormalAfterQueueDone;
 

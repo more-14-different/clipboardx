@@ -231,7 +231,7 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 ```powershell
 # 在仓库根目录执行
-$v = "1.3.5"   # 与 csproj 同步后改这里
+$v = "1.3.6"   # 与 csproj 同步后改这里
 Set-ExecutionPolicy -Scope Process -Bypass -Force
 .\native\ShellNavigate\build.ps1
 
@@ -291,6 +291,11 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 ## 更新记录
 
 结构化列表见 **[CHANGELOG.md](CHANGELOG.md)**（推送 `v*` 标签后，GitHub Release 会从中截取当前版本的 **更新内容**）。以下为 README 内便于浏览的摘录；安装包见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**。
+
+### v1.3.6
+
+- **剪贴板 · 粘贴模式**：设置中可选向目标窗口模拟 **Ctrl+V** 或 **Shift+Insert**（默认 Ctrl+V）；检测到**命令行/终端**目标且当前为 Ctrl+V 时，**临时**改用 Shift+Insert（不改保存项）
+- **设置 · 管理员身份**：默认以管理员运行；切换该项并保存后**自动重启**；**设置窗口**打开时前置，避免被置顶剪贴板面板或其它窗口挡住
 
 ### v1.3.5
 
