@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -24,11 +25,8 @@ public partial class FileDialogJumpPickerWindow : Window
     private const int PageSize = 8;
 
     /// <summary>低级钩子回调须用静态委托持有，避免 Unhook 后晚到回调撞上已被回收的实例委托（见 <see cref="PopupWindow"/> 说明）。</summary>
-    private static readonly Win32.LowLevelKeyboardProc s_jumpPickerKbThunk = StaticJumpPickerKeyboardHook;
     private static readonly Win32.LowLevelMouseProc s_jumpPickerMouseThunk = StaticJumpPickerMouseHook;
     private static readonly Win32.WinEventDelegate s_jumpPickerWinEventThunk = StaticJumpPickerWinEventProc;
-    private static IntPtr s_jumpPickerKbHookForNext;
-    private static FileDialogJumpPickerWindow? s_jumpPickerKbOwner;
     private static IntPtr s_jumpPickerMouseHookForNext;
     private static FileDialogJumpPickerWindow? s_jumpPickerMouseOwner;
     private static FileDialogJumpPickerWindow? s_jumpPickerWinEventOwner;
@@ -42,7 +40,6 @@ public partial class FileDialogJumpPickerWindow : Window
     private readonly bool _autoForegroundStickyMode;
     private readonly List<FileJumpCandidate> _collectorSnapshot;
 
-    private IntPtr _jumpKeyboardHook;
     private bool _suppressJumpHook;
 
     private IntPtr _hwnd;
@@ -58,6 +55,14 @@ public partial class FileDialogJumpPickerWindow : Window
     private IntPtr _jumpPickerWinEventHook;
 
     private DispatcherTimer? _dockFollowTimer;
+    private bool _dockDialogRectCached;
+    private Win32.RECT _lastDockDialogRect;
+
+    /// <summary>EVENT_SYSTEM_FOREGROUND 在开关窗口时会连发，合并到 UI 线程单次处理，避免队列爆炸导致鼠标卡顿。</summary>
+    private int _foregroundDismissCoalesceSeq;
+
+    /// <summary>关闭流程一开始就置位并拆掉 LL 钩，避免关窗前台风暴仍往 UI 线程排队。</summary>
+    private volatile bool _jumpPickerInputHooksDetached;
 
     private int _pendingPhysX;
     private int _pendingPhysY;
@@ -152,12 +157,11 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void FileDialogJumpPickerWindow_Closed(object? sender, EventArgs e)
     {
+        ShellNavigateLog.Write("filejump",
+            $"JumpPicker Closed hwnd=0x{_hwnd.ToInt64():X} sticky={_autoForegroundStickyMode}");
         _everythingQueryCts?.Cancel();
         _everythingQueryCts = null;
-        _dockFollowTimer?.Stop();
-        _dockFollowTimer = null;
-        UninstallKeyboardHook();
-        UninstallJumpPickerOutsideHooks();
+        DetachJumpPickerLowLevelHooksAndFollowTimer();
         if (_hwnd != IntPtr.Zero)
         {
             try
@@ -166,6 +170,24 @@ public partial class FileDialogJumpPickerWindow : Window
             }
             catch { /* ignore */ }
         }
+    }
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        var sw = Stopwatch.StartNew();
+        _jumpPickerInputHooksDetached = true;
+        DetachJumpPickerLowLevelHooksAndFollowTimer();
+        sw.Stop();
+        ShellNavigateLog.Write("filejump",
+            $"JumpPicker OnClosing detach_ms={sw.ElapsedMilliseconds} hwnd=0x{_hwnd.ToInt64():X} sticky={_autoForegroundStickyMode}");
+        base.OnClosing(e);
+    }
+
+    private void DetachJumpPickerLowLevelHooksAndFollowTimer()
+    {
+        _dockFollowTimer?.Stop();
+        _dockFollowTimer = null;
+        UninstallJumpPickerOutsideHooks();
     }
 
     private void FileDialogJumpPickerWindow_Activated(object? sender, EventArgs e)
@@ -250,15 +272,6 @@ public partial class FileDialogJumpPickerWindow : Window
             s_jumpPickerWinEventOwner = null;
     }
 
-    private static IntPtr StaticJumpPickerKeyboardHook(int nCode, IntPtr wParam, IntPtr lParam)
-    {
-        var owner = s_jumpPickerKbOwner;
-        var hhk = s_jumpPickerKbHookForNext;
-        if (owner != null && hhk != IntPtr.Zero)
-            return owner.JumpKeyboardHookProc(nCode, wParam, lParam);
-        return Win32.CallNextHookEx(hhk, nCode, wParam, lParam);
-    }
-
     private static IntPtr StaticJumpPickerMouseHook(int nCode, IntPtr wParam, IntPtr lParam)
     {
         var owner = s_jumpPickerMouseOwner;
@@ -279,6 +292,8 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private IntPtr JumpPickerMouseHookProc(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        if (_jumpPickerInputHooksDetached)
+            return Win32.CallNextHookEx(_jumpPickerMouseHook, nCode, wParam, lParam);
         if (nCode >= 0 && IsLoaded && Opacity > 0)
         {
             var msg = wParam.ToInt32();
@@ -300,7 +315,39 @@ public partial class FileDialogJumpPickerWindow : Window
         IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
         int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
-        Dispatcher.BeginInvoke(() => TryDismissJumpPickerFromForegroundChange(hwnd));
+        if (_jumpPickerInputHooksDetached) return;
+        // 前台仍在「跳转列表 + 同一文件对话框」会话内时不必 dismiss，也不往 UI 线程派工（关窗时会连发大量前台事件）。
+        if (ForegroundHwndKeepsJumpPickerOpen(hwnd)) return;
+
+        int seq = Interlocked.Increment(ref _foregroundDismissCoalesceSeq);
+        var evtHwnd = hwnd;
+        // 用 Input 优先于 Background，避免主线程上积压的 Input 工作把「关列表」压在队列末尾数秒
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (_jumpPickerInputHooksDetached) return;
+            if (seq != Volatile.Read(ref _foregroundDismissCoalesceSeq)) return;
+            var fg = Win32.GetForegroundWindow();
+            ShellNavigateLog.Write("filejump",
+                $"JumpPicker sub_fg dismiss_try fg=0x{fg.ToInt64():X} evtHwnd=0x{evtHwnd.ToInt64():X}");
+            TryDismissJumpPickerFromForegroundChange(fg);
+        });
+    }
+
+    /// <summary>前台 HWND 是否属于跳转列表或绑定的文件对话框同一 root（焦点在对话框内不应误关列表）。</summary>
+    private bool ForegroundHwndKeepsJumpPickerOpen(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        if (_hwnd != IntPtr.Zero)
+        {
+            if (hwnd == _hwnd) return true;
+            if (Win32.IsChild(_hwnd, hwnd)) return true;
+        }
+
+        if (_fileDialogOwnerHwnd == IntPtr.Zero || !Win32.IsWindow(_fileDialogOwnerHwnd)) return false;
+        var dlgRoot = Win32.GetAncestor(_fileDialogOwnerHwnd, Win32.GA_ROOT);
+        if (dlgRoot == IntPtr.Zero) return false;
+        var fgRoot = Win32.GetAncestor(hwnd, Win32.GA_ROOT);
+        return fgRoot != IntPtr.Zero && fgRoot == dlgRoot;
     }
 
     private void TryDismissJumpPickerFromOutsideMouse()
@@ -316,6 +363,11 @@ public partial class FileDialogJumpPickerWindow : Window
     private void TryDismissJumpPickerFromForegroundChange(IntPtr newForeground)
     {
         if (!IsLoaded || Opacity <= 0) return;
+        if (_fileDialogOwnerHwnd != IntPtr.Zero && !Win32.IsWindow(_fileDialogOwnerHwnd))
+        {
+            Close();
+            return;
+        }
         if (newForeground == _hwnd) return;
         Win32.GetCursorPos(out var cursor);
         if (Win32.WindowFromPoint(cursor) == _hwnd) return;
@@ -324,53 +376,29 @@ public partial class FileDialogJumpPickerWindow : Window
         Close();
     }
 
-    private void InstallKeyboardHook()
+    /// <summary>WPF 隧道事件处理列表快捷键；避免 WH_KEYBOARD_LL + Dispatcher.Invoke 阻塞全局输入。</summary>
+    private void JumpPicker_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (_jumpKeyboardHook != IntPtr.Zero) return;
-        s_jumpPickerKbOwner = this;
-        _jumpKeyboardHook = Win32.SetWindowsHookEx(
-            Win32.WH_KEYBOARD_LL, s_jumpPickerKbThunk, Win32.GetModuleHandle(null), 0);
-        s_jumpPickerKbHookForNext = _jumpKeyboardHook;
-    }
+        if (_suppressJumpHook) return;
+        if (KeyboardFocusIsExternalEditable()) return;
 
-    private void UninstallKeyboardHook()
-    {
-        if (_jumpKeyboardHook == IntPtr.Zero) return;
-        Win32.UnhookWindowsHookEx(_jumpKeyboardHook);
-        _jumpKeyboardHook = IntPtr.Zero;
-        if (s_jumpPickerKbOwner == this)
+        int vkInt = KeyInterop.VirtualKeyFromKey(e.Key);
+        if (vkInt == 0) return;
+
+        bool ctrl = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0
+            || (Win32.GetAsyncKeyState(0xA2) & 0x8000) != 0
+            || (Win32.GetAsyncKeyState(0xA3) & 0x8000) != 0;
+        bool alt = (Win32.GetAsyncKeyState(0x12) & 0x8000) != 0
+            || (Win32.GetAsyncKeyState(0xA4) & 0x8000) != 0
+            || (Win32.GetAsyncKeyState(0xA5) & 0x8000) != 0;
+        if (ctrl || alt)
         {
-            s_jumpPickerKbOwner = null;
-            s_jumpPickerKbHookForNext = IntPtr.Zero;
-        }
-    }
-
-    private IntPtr JumpKeyboardHookProc(int nCode, IntPtr wParam, IntPtr lParam)
-    {
-        if (nCode < 0)
-            return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
-        if (wParam != (IntPtr)Win32.WM_KEYDOWN)
-            return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
-        if (_suppressJumpHook)
-            return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
-        if (KeyboardFocusIsExternalEditable())
-            return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
-
-        var kb = Marshal.PtrToStructure<Win32.KBDLLHOOKSTRUCT>(lParam);
-
-        bool handled = false;
-        try
-        {
-            Dispatcher.Invoke(() => { handled = ApplyKeyDown(kb.vkCode, kb.scanCode); });
-        }
-        catch
-        {
-            return Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
+            if (!IsPanelModifierMatch())
+                return;
         }
 
-        return handled
-            ? (IntPtr)1
-            : Win32.CallNextHookEx(_jumpKeyboardHook, nCode, wParam, lParam);
+        if (ApplyKeyDown((uint)vkInt, 0))
+            e.Handled = true;
     }
 
     /// <summary>
@@ -412,7 +440,7 @@ public partial class FileDialogJumpPickerWindow : Window
         return cls.Contains("RichEdit", StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>统一键盘逻辑：低级钩子同步调用；返回 true 表示已消费按键。</summary>
+    /// <summary>统一键盘逻辑（<see cref="JumpPicker_PreviewKeyDown"/>）；返回 true 表示已消费按键。</summary>
     private bool ApplyKeyDown(uint vk, uint scan)
     {
         if (IsPanelModifierMatch())
@@ -776,7 +804,8 @@ public partial class FileDialogJumpPickerWindow : Window
         }
         catch { /* ignore */ }
 
-        InstallKeyboardHook();
+        ShellNavigateLog.Write("filejump",
+            $"JumpPicker SourceInitialized hwnd=0x{_hwnd.ToInt64():X} dlgOwner=0x{_fileDialogOwnerHwnd.ToInt64():X} sticky={_autoForegroundStickyMode}");
     }
 
     private IntPtr JumpPickerWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -836,28 +865,46 @@ public partial class FileDialogJumpPickerWindow : Window
         Opacity = 1.0;
         if (!_autoForegroundStickyMode)
             InstallJumpPickerOutsideHooks();
-        if (_dockBesideDialog)
+        // 只要有绑定的文件对话框 HWND，就轮询其是否仍有效；否则「跟随鼠标」等非贴靠模式下关系统框后
+        // 仅靠 WinEvent + Background 派工与「光标在列表上则不退」会拖到数秒才关跳转列表。
+        if (_fileDialogOwnerHwnd != IntPtr.Zero)
         {
             _dockFollowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
             _dockFollowTimer.Tick += (_, _) => DockFollowTick();
             _dockFollowTimer.Start();
         }
+
+        ShellNavigateLog.Write("filejump",
+            $"JumpPicker ContentRendered hwnd=0x{_hwnd.ToInt64():X} outsideHooks={!_autoForegroundStickyMode} dock={_dockBesideDialog}");
         // 弹出后聚焦列表，字母键才能进 everything 筛选；焦点回到文件对话框编辑框时仍由 KeyboardFocusIsExternalEditable 把按键让给对话框。
         Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
-        Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.ApplicationIdle);
     }
 
     private void DockFollowTick()
     {
-        if (!_dockBesideDialog || _hwnd == IntPtr.Zero) return;
-        if (!Win32.IsWindow(_fileDialogOwnerHwnd))
+        if (_hwnd == IntPtr.Zero) return;
+        if (_fileDialogOwnerHwnd != IntPtr.Zero && !Win32.IsWindow(_fileDialogOwnerHwnd))
         {
             Close();
             return;
         }
+        if (!_dockBesideDialog) return;
+        if (!Win32.GetWindowRect(_fileDialogOwnerHwnd, out var drDlg))
+        {
+            Close();
+            return;
+        }
+        if (_dockDialogRectCached
+            && drDlg.Left == _lastDockDialogRect.Left
+            && drDlg.Top == _lastDockDialogRect.Top
+            && drDlg.Right == _lastDockDialogRect.Right
+            && drDlg.Bottom == _lastDockDialogRect.Bottom)
+            return;
+
+        _lastDockDialogRect = drDlg;
+        _dockDialogRectCached = true;
         try
         {
-            UpdateLayout();
             ComputePhysicalPosition(useActualSize: true);
             ApplyPendingPhysicalSetWindowPos();
             ApplyPendingPhysicalAsWpfLeftTop();

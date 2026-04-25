@@ -19,8 +19,8 @@ public class AppSettings
     public uint FileJumpHotkeyModifiers { get; set; } = Win32.MOD_CONTROL;
     public uint FileJumpHotkeyKey { get; set; } = Win32.VK_G;
 
-    /// <summary>多候选时跳转列表弹出前的延时（毫秒）；0 表示立即弹出。</summary>
-    public int FileJumpPickerShowDelayMs { get; set; } = 100;
+    /// <summary>多候选时跳转列表弹出前的延时（毫秒）；0 表示立即弹出。自动弹出时仍会合并极短防抖（约一帧），见 PopupWindow。</summary>
+    public int FileJumpPickerShowDelayMs { get; set; } = 0;
 
     /// <summary>Mouse：跳转列表跟随鼠标附近；Dialog：紧贴文件对话框并随窗口移动。</summary>
     public string FileJumpPickerFollowMode { get; set; } = FileJumpPickerFollowModes.Dialog;

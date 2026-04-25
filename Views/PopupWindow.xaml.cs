@@ -175,6 +175,12 @@ public partial class PopupWindow : Window
     private readonly ClipboardHistoryStore _historyStore = new();
     private AppSettings? _appSettings;
     private IntPtr _lastForegroundForDialogTrack = IntPtr.Zero;
+    /// <summary>前台切换风暴时合并到单次 UI 回调，避免关闭跳转列表时 Dispatcher 队列爆炸。</summary>
+    private int _foregroundChangeCoalesceGen;
+    /// <summary>自上次 UI 处理以来，原生 WinEvent 前台回调次数（合并前）。</summary>
+    private int _foregroundNativeBurst;
+    /// <summary>因序号过期而跳过的 UI 调度次数（合并丢弃的 BeginInvoke）。</summary>
+    private int _foregroundUiDispatchSuperseded;
 
     #region agent log
     private static readonly object _agentDbgLock = new();
@@ -259,6 +265,10 @@ public partial class PopupWindow : Window
     private int _fileJumpAutoSyncScheduleGen;
     /// <summary>对话框路径快照分层等待调度代数。</summary>
     private int _dialogSnapshotScheduleGen;
+    private IntPtr _snapshotFolderDebounceHwnd;
+    private long _snapshotFolderDebounceTick;
+    /// <summary><see cref="FileDialogJumpPickerWindow.ShowDialog"/> 返回后短窗内抑制自动再弹，减轻关列表瞬间与快照/同步定时器叠压。</summary>
+    private long _fileJumpPickerJustClosedUntilTick;
     /// <summary>最近一次离开外部文件管理器时记录到的路径；用于切回文件对话框时优先同步。</summary>
     private string _lastExternalFolder = "";
     private IntPtr _lastExternalManagerRoot = IntPtr.Zero;
@@ -3499,48 +3509,105 @@ public partial class PopupWindow : Window
         IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
         int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
+        Interlocked.Increment(ref _foregroundNativeBurst);
         var prev = _lastForegroundForDialogTrack;
         _lastForegroundForDialogTrack = hwnd;
 
-        Dispatcher.BeginInvoke(() => TryRememberFolderFromDialog(prev));
-        Dispatcher.BeginInvoke(() => TryRememberExternalManagerFolder(prev));
-        Dispatcher.BeginInvoke(() => TryRememberExternalManagerFolder(hwnd));
-
-        var dialogForForeground = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
-        if (dialogForForeground != IntPtr.Zero)
+        int seq = Interlocked.Increment(ref _foregroundChangeCoalesceGen);
+        var prevCap = prev;
+        var hwndCap = hwnd;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
-            var prevForAutoSync = prev;
-            ScheduleSnapshotFolderFromDialog(dialogForForeground);
-            Dispatcher.BeginInvoke(() =>
+            if (seq != Volatile.Read(ref _foregroundChangeCoalesceGen))
             {
-                if (_appSettings == null) return;
-                if (_appSettings.FileJumpPickerOpenWhenDialogForeground)
-                    TryAutoOpenFileJumpPickerWhenDialogForeground(dialogForForeground);
-                else if (_appSettings.FileJumpAutoOnFirstClick)
-                    TryAutoNavigateBestPathWhenDialogForeground(dialogForForeground);
-            });
-            Dispatcher.BeginInvoke(() => TryAutoSyncPathOnDialogReturn(hwnd, prevForAutoSync));
+                Interlocked.Increment(ref _foregroundUiDispatchSuperseded);
+                return;
+            }
+
+            int nat = Interlocked.Exchange(ref _foregroundNativeBurst, 0);
+            int super = Interlocked.Exchange(ref _foregroundUiDispatchSuperseded, 0);
+            ProcessForegroundChangedUi(prevCap, hwndCap, nat, super);
+        });
+    }
+
+    /// <summary>
+    /// 原 OnForegroundChanged 内多次 BeginInvoke 会在前台连发时撑爆队列（尤其关跳转列表瞬间），
+    /// 与跳转窗共用同一 Dispatcher 时表现为长时间卡顿。
+    /// </summary>
+    private void ProcessForegroundChangedUi(IntPtr prev, IntPtr hwnd, int nativeBurst, int supersededDispatches)
+    {
+        var sw = Stopwatch.StartNew();
+        TryRememberFolderFromDialog(prev);
+        TryRememberExternalManagerFolder(prev);
+        TryRememberExternalManagerFolder(hwnd);
+
+        // 列表已开时前台常在列表↔文件框间跳：勿重复快照 / 自动弹 / 切回同步（减少定时器与 STA 采集叠压）。
+        if (_activeFileJumpPicker == null)
+        {
+            var dialogForForeground = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
+            if (dialogForForeground != IntPtr.Zero)
+            {
+                var prevForAutoSync = prev;
+                ScheduleSnapshotFolderFromDialog(dialogForForeground);
+                if (_appSettings != null)
+                {
+                    if (_appSettings.FileJumpPickerOpenWhenDialogForeground)
+                        TryAutoOpenFileJumpPickerWhenDialogForeground(dialogForForeground);
+                    else if (_appSettings.FileJumpAutoOnFirstClick)
+                        TryAutoNavigateBestPathWhenDialogForeground(dialogForForeground);
+                }
+
+                TryAutoSyncPathOnDialogReturn(hwnd, prevForAutoSync);
+            }
+
+            var armTarget = dialogForForeground != IntPtr.Zero
+                ? dialogForForeground
+                : FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
+            UpdateFileJumpClickToNavigateArm(armTarget != IntPtr.Zero ? armTarget : hwnd);
+        }
+        else
+        {
+            var dlgPick = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
+            var armPick = dlgPick != IntPtr.Zero
+                ? dlgPick
+                : FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
+            UpdateFileJumpClickToNavigateArm(armPick != IntPtr.Zero ? armPick : hwnd);
         }
 
-        var armTarget = dialogForForeground != IntPtr.Zero
-            ? dialogForForeground
-            : FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
-        Dispatcher.BeginInvoke(() =>
-            UpdateFileJumpClickToNavigateArm(armTarget != IntPtr.Zero ? armTarget : hwnd));
+        var shouldHidePopup = _isPopupVisible
+            && hwnd != _hwnd
+            && hwnd != _targetWindow;
+        if (shouldHidePopup)
+        {
+            Win32.GetCursorPos(out var cursor);
+            if (Win32.WindowFromPoint(cursor) != _hwnd)
+                HidePopup();
+        }
 
-        if (!_isPopupVisible) return;
-        if (hwnd == _hwnd || hwnd == _targetWindow) return;
-
-        Win32.GetCursorPos(out var cursor);
-        if (Win32.WindowFromPoint(cursor) == _hwnd) return;
-
-        Dispatcher.BeginInvoke(() => HidePopup());
+        sw.Stop();
+        int ms = (int)sw.ElapsedMilliseconds;
+        bool pickerOpen = _activeFileJumpPicker != null;
+        bool logFg = nativeBurst >= 2 || supersededDispatches > 0 || ms >= 15 || pickerOpen
+            || _fileJumpPickerOpenInProgress || ms >= 40;
+        if (logFg)
+        {
+            var slow = ms >= 40 ? " SLOW" : "";
+            ShellNavigateLog.Write("filejump",
+                $"fg_ui nat={nativeBurst} super={supersededDispatches} ms={ms} prev=0x{prev.ToInt64():X} hwnd=0x{hwnd.ToInt64():X} picker={pickerOpen} openInProg={_fileJumpPickerOpenInProgress}{slow}");
+        }
     }
 
     /// <summary>对话框成为前台后分层短等再读路径：先快试，读不到再逐段补等（总上限接近原先单次长等）。</summary>
     private void ScheduleSnapshotFolderFromDialog(IntPtr dialogHwnd)
     {
         if (_appSettings == null || dialogHwnd == IntPtr.Zero) return;
+        var nowSnap = Environment.TickCount64;
+        if (dialogHwnd == _snapshotFolderDebounceHwnd
+            && nowSnap - _snapshotFolderDebounceTick < 450)
+            return;
+        _snapshotFolderDebounceHwnd = dialogHwnd;
+        _snapshotFolderDebounceTick = nowSnap;
+
         unchecked { _dialogSnapshotScheduleGen++; }
         var scheduleGen = _dialogSnapshotScheduleGen;
         var target = dialogHwnd;
@@ -3879,14 +3946,15 @@ public partial class PopupWindow : Window
     {
         if (_appSettings == null || !_appSettings.FileJumpPickerOpenWhenDialogForeground) return;
         if (foregroundHwnd == IntPtr.Zero) return;
+        if (Environment.TickCount64 < _fileJumpPickerJustClosedUntilTick) return;
 
         _fileJumpAutoOpenDebounceTimer?.Stop();
         _fileJumpAutoOpenDebounceTimer = null;
         var hwndCapture = foregroundHwnd;
         var delayMs = Math.Clamp(_appSettings.FileJumpPickerShowDelayMs, 0, 10000);
-        // 打开/保存窗到前台时，系统常在极短时间内多次触发；延时为 0 时仍用短防抖合并，避免并行多个 STA 采集线程。
-        // 采集本身已压到数十毫秒级（见 debug 日志），此处过长会明显拖慢「延时填 0」时的体感。
-        var effectiveMs = delayMs <= 0 ? 80 : delayMs;
+        // 打开/保存窗到前台时，系统常在极短时间内多次触发；延时为 0 时仍用约一帧的防抖合并，避免并行多个 STA 采集线程。
+        // 原先固定 80ms 会明显拖慢「立即弹出」的体感。
+        var effectiveMs = delayMs <= 0 ? 16 : delayMs;
 
         _fileJumpAutoOpenDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(effectiveMs) };
         _fileJumpAutoOpenDebounceTimer.Tick += (_, _) =>
@@ -4060,6 +4128,7 @@ public partial class PopupWindow : Window
         if (_appSettings.FileJumpPickerOpenWhenDialogForeground) return; // 该路径仅用于纯直跳
         if (!_appSettings.FileJumpAutoOnFirstClick) return;
         if (foregroundHwnd == IntPtr.Zero) return;
+        if (Environment.TickCount64 < _fileJumpPickerJustClosedUntilTick) return;
 
         if (_fileJumpAutoFirstJumpDoneRoot != IntPtr.Zero
             && !Win32.IsWindow(_fileJumpAutoFirstJumpDoneRoot))
@@ -4136,6 +4205,7 @@ public partial class PopupWindow : Window
     {
         if (_appSettings == null) return;
         if (foregroundHwnd == IntPtr.Zero) return;
+        if (Environment.TickCount64 < _fileJumpPickerJustClosedUntilTick) return;
 
         var dialogHwnd = ResolveFileJumpTargetHwndInternal(foregroundHwnd);
         if (dialogHwnd == IntPtr.Zero) return;
@@ -4379,8 +4449,6 @@ public partial class PopupWindow : Window
 
         var delayMs = Math.Clamp(_appSettings.FileJumpPickerShowDelayMs, 0, 10000);
 
-        var openPriority = delayMs <= 0 ? DispatcherPriority.Input : DispatcherPriority.Normal;
-
         void QueueOpenFileJumpPicker()
         {
             Dispatcher.BeginInvoke(() =>
@@ -4423,7 +4491,14 @@ public partial class PopupWindow : Window
                         ShellNavigateLog.Write("filejump", "afterPickerAssigned: " + ex);
                     }
 
+                    ShellNavigateLog.Write("filejump",
+                        $"JumpPicker ShowDialog begin sticky={autoForegroundStickyMode} dlg=0x{dialogForPicker.ToInt64():X}");
+                    var swPicker = Stopwatch.StartNew();
                     var accepted = picker.ShowDialog() == true;
+                    swPicker.Stop();
+                    ShellNavigateLog.Write("filejump",
+                        $"JumpPicker ShowDialog end accepted={accepted} ms={swPicker.ElapsedMilliseconds} sticky={autoForegroundStickyMode}");
+                    _fileJumpPickerJustClosedUntilTick = Environment.TickCount64 + 700;
                     if (!autoForegroundStickyMode && accepted && !string.IsNullOrEmpty(picker.SelectedPath))
                         FileDialogJumpHelper.TryNavigateToFolder(dialogForPicker, picker.SelectedPath, allowShellInject);
                 }
@@ -4431,7 +4506,7 @@ public partial class PopupWindow : Window
                 {
                     _fileJumpPickerOpenInProgress = false;
                 }
-            }, openPriority);
+            }, DispatcherPriority.Input);
         }
 
         if (delayMs <= 0)

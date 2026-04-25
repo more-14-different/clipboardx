@@ -14,7 +14,8 @@
         SizeToContent="Height"
         MaxHeight="560"
         ShowActivated="True"
-        Title="ClipboardX — 跳转到文件夹">
+        Title="ClipboardX — 跳转到文件夹"
+        PreviewKeyDown="JumpPicker_PreviewKeyDown">
 
     <Window.Resources>
         <ResourceDictionary>
