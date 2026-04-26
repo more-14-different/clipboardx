@@ -27,6 +27,7 @@ internal static class FileDialogJumpHelper
     public static FileDialogKind ClassifyFileDialog(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd)) return FileDialogKind.None;
+        if (IsKnownNonFileDialogTitle(Win32.GetWindowText(hwnd))) return FileDialogKind.None;
 
         // WPS 不使用系统公共 #32770 对话框，须在类名判断之前识别。
         if (IsWpsSuiteFileDialog(hwnd))
@@ -58,6 +59,7 @@ internal static class FileDialogJumpHelper
     public static bool IsLikelyFileDialog(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd)) return false;
+        if (IsKnownNonFileDialogTitle(Win32.GetWindowText(hwnd))) return false;
         if (ClassifyFileDialog(hwnd) != FileDialogKind.None) return true;
         return CustomFileDialogStore.FindMatchingRule(hwnd) != null;
     }
@@ -260,13 +262,35 @@ internal static class FileDialogJumpHelper
     private static bool IsFileDialogTitle(string title)
     {
         if (string.IsNullOrEmpty(title)) return false;
+        if (IsKnownNonFileDialogTitle(title)) return false;
         var t = title.ToLowerInvariant();
         return title.Contains("打开", StringComparison.Ordinal)
                || title.Contains("另存", StringComparison.Ordinal)
                || title.Contains("保存", StringComparison.Ordinal)
-               || t.Contains("open", StringComparison.Ordinal)
-               || t.Contains("save", StringComparison.Ordinal)
+               || t.Contains("open file", StringComparison.Ordinal)
+               || t.Contains("open folder", StringComparison.Ordinal)
+               || t.Equals("open", StringComparison.Ordinal)
+               || t.Contains("save as", StringComparison.Ordinal)
+               || t.Equals("save", StringComparison.Ordinal)
                || t.Contains("browse", StringComparison.Ordinal);
+    }
+
+    private static bool IsKnownNonFileDialogTitle(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return false;
+        var t = title.Trim().ToLowerInvariant();
+
+        // Sublime Text 等编辑器的保存确认框是 #32770，标题含 save，但不是文件对话框。
+        if (t.Contains("save changes", StringComparison.Ordinal)) return true;
+        if (t.Contains("unsaved changes", StringComparison.Ordinal)) return true;
+        if (t.Contains("do you want to save", StringComparison.Ordinal)) return true;
+        if (t.Contains("confirm save", StringComparison.Ordinal)) return true;
+
+        if (title.Contains("保存更改", StringComparison.Ordinal)) return true;
+        if (title.Contains("是否保存", StringComparison.Ordinal)) return true;
+        if (title.Contains("保存修改", StringComparison.Ordinal)) return true;
+        if (title.Contains("未保存", StringComparison.Ordinal)) return true;
+        return false;
     }
 
     public static bool TryReadCurrentFolder(IntPtr hwnd, out string folder) =>
