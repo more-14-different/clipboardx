@@ -225,13 +225,24 @@ public sealed class ExplorerQuickFindController : IDisposable
         if (ctrl || alt || win)
             return PassThrough();
 
-        // 快速类名检测（< 0.1ms），不做 COM/UIA
-        var frame = FileManagerPathCollector.TryFindExplorerCabinetFrame(fg);
-        if (frame == IntPtr.Zero)
-            return PassThrough();
+        var cls = Win32.GetWindowClassName(fg);
+        var isDesktop = cls.Equals("Progman", StringComparison.OrdinalIgnoreCase)
+                     || cls.Equals("WorkerW", StringComparison.OrdinalIgnoreCase);
 
-        if (!QuickCheckFocusNotEditBox(frame))
-            return PassThrough();
+        IntPtr frame;
+        if (isDesktop)
+        {
+            frame = fg;
+        }
+        else
+        {
+            frame = FileManagerPathCollector.TryFindExplorerCabinetFrame(fg);
+            if (frame == IntPtr.Zero)
+                return PassThrough();
+
+            if (!QuickCheckFocusNotEditBox(frame))
+                return PassThrough();
+        }
 
         CaptureKeyState(kb, out var keyState);
         if (!TryGetChar(kb.vkCode, kb.scanCode, keyState, out var ch) || ch < ' ')
@@ -240,7 +251,7 @@ public sealed class ExplorerQuickFindController : IDisposable
         // 通过快速检测：吞键，异步启动会话
         _sessionActive = true;
         _sessionExplorerFrame = frame;
-        _dispatcher.BeginInvoke(() => BeginSessionAsync(frame, ch));
+        _dispatcher.BeginInvoke(() => BeginSessionAsync(frame, ch, isDesktop));
         return (IntPtr)1;
     }
 
@@ -253,29 +264,38 @@ public sealed class ExplorerQuickFindController : IDisposable
     // ===================== Dispatcher 线程处理 =====================
 
     /// <summary>异步启动会话：获取文件夹路径（可能耗时），失败则回退。</summary>
-    private async void BeginSessionAsync(IntPtr frame, char firstChar)
+    private async void BeginSessionAsync(IntPtr frame, char firstChar, bool isDesktop = false)
     {
         string? folder = null;
-        try
-        {
-            folder = await Task.Run(() => FileManagerPathCollector.TryGetExplorerFolderIfForeground(frame));
-        }
-        catch { /* ignore */ }
 
-        if (string.IsNullOrEmpty(folder))
+        if (isDesktop)
         {
-            LogDiag($"异步取文件夹路径失败 frame=0x{frame:X}");
-            _sessionActive = false;
-            _sessionExplorerFrame = IntPtr.Zero;
-            _pendingChars.Clear();
-            return;
+            folder = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            LogDiag($"桌面场景，使用桌面目录 folder={folder}");
+        }
+        else
+        {
+            try
+            {
+                folder = await Task.Run(() => FileManagerPathCollector.TryGetExplorerFolderIfForeground(frame));
+            }
+            catch { /* ignore */ }
         }
 
         _session = true;
         _sessionExplorerFrame = frame;
-        try { _sessionFolderPath = Path.GetFullPath(folder.Trim()); }
-        catch { _sessionFolderPath = folder; }
-        _sessionFolderDisplay = _sessionFolderPath;
+        if (string.IsNullOrEmpty(folder))
+        {
+            _sessionFolderPath = "";
+            _sessionFolderDisplay = "全盘";
+            LogDiag($"非常规文件夹，全盘搜索 frame=0x{frame:X}");
+        }
+        else
+        {
+            try { _sessionFolderPath = Path.GetFullPath(folder.Trim()); }
+            catch { _sessionFolderPath = folder; }
+            _sessionFolderDisplay = _sessionFolderPath;
+        }
         _typing = firstChar.ToString();
 
         // 消费异步初始化期间缓冲的字符
