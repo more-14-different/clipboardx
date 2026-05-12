@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git log *)",
+      "Bash(git tag *)",
+      "Bash(git ls-remote *)",
+      "Bash(git remote *)",
+      "Bash(reg query *)"
+    ]
+  }
+}

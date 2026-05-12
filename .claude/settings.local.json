@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "Bash(git ls-remote *)",
+      "Bash(ls -lt ~/.claude/projects/ | head -20)",
+      "Read(//c/Users/chaoj/.claude/projects/**)",
+      "Bash(python3 -c ' *)",
+      "Bash(mkdir -p .claude)",
+      "Bash(cat ~/.claude/settings.json 2>/dev/null || echo \"NOT FOUND\")",
+      "Read(//c/Users/chaoj/.claude/**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\chaoj\\dev\\tools\\clipboard\\.claude"
+    ]
+  }
+}
