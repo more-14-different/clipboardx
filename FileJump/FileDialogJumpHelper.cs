@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -226,9 +227,20 @@ internal static class FileDialogJumpHelper
     private static HashSet<string> CollectDescendantClassNames(IntPtr root)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int nodeCount = 0;
+        const int maxNodes = 500;
         void Walk(IntPtr h)
         {
-            set.Add(Win32.GetWindowClassName(h));
+            if (++nodeCount > maxNodes) return;
+            var cls = Win32.GetWindowClassName(h);
+            set.Add(cls);
+            // 提前终止：4 个目标类名全部找到后无需继续遍历
+            if (set.Count >= 4
+                && set.Any(c => c.Contains("DirectUIHWND", StringComparison.Ordinal))
+                && set.Contains("SysListView32")
+                && set.Contains("ToolbarWindow32")
+                && set.Contains("Edit"))
+                return;
             Win32.EnumChildWindows(h, (c, _) =>
             {
                 Walk(c);
@@ -301,6 +313,21 @@ internal static class FileDialogJumpHelper
     {
         folder = "";
         var kind = ClassifyFileDialog(hwnd);
+
+        // DLL 注入仅适用于文件对话框（#32770），不适用于 Explorer 窗口
+        var className = Win32.GetWindowClassName(hwnd);
+        var isExplorer = className is "CabinetWClass" or "ExploreWClass";
+        if (!isExplorer)
+        {
+            // 最可靠方式：DLL 注入读取 IShellBrowser（适用于标准对话框）
+            if (ShellDialogDeepNavigate.TryReadCurrentFolderInject(hwnd, out var injectFolder))
+            {
+                folder = injectFolder;
+                return true;
+            }
+        }
+
+        // UIA 回退（用于非标准对话框、Explorer 窗口、或注入失败时）
         try
         {
             var root = AutomationElement.FromHandle(hwnd);
@@ -330,14 +357,12 @@ internal static class FileDialogJumpHelper
                     if (el.TryGetCurrentPattern(ValuePattern.Pattern, out var vpObj))
                     {
                         var v = ((ValuePattern)vpObj).Current.Value;
-                        if (TryNormalizeToExistingDirectory(v, out var norm) && norm.Length > best.Length)
+                        if (TryNormalizeToExistingDirectory(v, out var norm) && best.Length == 0)
                             best = norm;
                     }
                 }
                 catch { }
 
-                // 勿在 best 非空时跳过：Win11 资源管理器等场景下 BFS 可能先命中「D:\」类 Value，
-                // 地址栏面包屑 Name（此电脑 > … > gn）在后序结点，仍需参与取更长、更具体的路径。
                 if (!allowBreadcrumbInLoop) continue;
 
                 try
@@ -372,6 +397,39 @@ internal static class FileDialogJumpHelper
             return true;
         }
 
+        return false;
+    }
+
+    /// <summary>尝试对对话框的子窗口发送 CDM_GETFOLDERPATH。</summary>
+    private static bool TryReadFolderViaCdmChildren(IntPtr parent, out string folder)
+    {
+        folder = "";
+        try
+        {
+            var child = Win32.GetTopWindow(parent);
+            if (child == IntPtr.Zero) return false;
+            var queue = new Queue<IntPtr>();
+            queue.Enqueue(child);
+            var count = 0;
+            while (queue.Count > 0 && count < 30)
+            {
+                var h = queue.Dequeue();
+                count++;
+                if (TryReadFolderViaCdmMessage(h, out var path))
+                {
+                    folder = path;
+                    return true;
+                }
+                // 枚举子窗口
+                var sub = Win32.GetTopWindow(h);
+                while (sub != IntPtr.Zero)
+                {
+                    queue.Enqueue(sub);
+                    sub = Win32.GetWindow(sub, 2 /* GW_HWNDNEXT */);
+                }
+            }
+        }
+        catch { }
         return false;
     }
 
@@ -415,7 +473,40 @@ internal static class FileDialogJumpHelper
         return false;
     }
 
-    /// <summary>将地址栏/名称中的「此电脑 &gt; …」或「C: &gt; …」等面包屑文本还原为已存在目录（Q-Dir、WPS 等共用）。</summary>
+    /// <summary>
+    /// 通过向对话框发送 CDM_GETFOLDERPATH（WM_USER + 0x44C）获取当前文件夹路径。
+    /// 这是 Win32 共用对话框的原生 API，适用于标准 GetOpenFileName / GetSaveFileName 对话框，
+    /// 在 UIA ValuePattern 不可用时作为回退。
+    /// </summary>
+    private static bool TryReadFolderViaCdmMessage(IntPtr hwnd, out string folder)
+    {
+        folder = "";
+        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd)) return false;
+        try
+        {
+            const int bufChars = 1024;
+            var hBuf = Marshal.AllocHGlobal(bufChars * 2);
+            try
+            {
+                var result = Win32.SendMessageTimeout(
+                    hwnd, Win32.CDM_GETFOLDERPATH,
+                    new IntPtr(bufChars), hBuf,
+                    Win32.SMTO_ABORTIFHUNG, 800, out _);
+                if (result.ToInt64() > 0)
+                {
+                    var path = Marshal.PtrToStringUni(hBuf);
+                    if (!string.IsNullOrEmpty(path) && TryNormalizeToExistingDirectory(path, out var norm))
+                    {
+                        folder = norm;
+                        return true;
+                    }
+                }
+            }
+            finally { Marshal.FreeHGlobal(hBuf); }
+        }
+        catch { }
+        return false;
+    }
     internal static bool TryWpsBreadcrumbTextToFolder(string? text, out string folder)
     {
         folder = "";

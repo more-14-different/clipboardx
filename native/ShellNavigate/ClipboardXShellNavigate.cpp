@@ -155,9 +155,60 @@ struct NavigateHookCtx
     HRESULT hrResult { E_FAIL };
 };
 
+// ---- Read current folder ----
+static HRESULT ReadCurrentFolderViaShellBrowser(HWND hDlg, WCHAR* outPath, int outPathChars)
+{
+    outPath[0] = L'\0';
+    constexpr UINT CWM_GETISHELLBROWSER = WM_USER + 7;
+
+    IUnknown* pUnk = reinterpret_cast<IUnknown*>(SendMessageW(hDlg, CWM_GETISHELLBROWSER, 0, 0));
+    if (!pUnk) return E_FAIL;
+
+    IShellBrowser* pSB = nullptr;
+    HRESULT hr = pUnk->QueryInterface(IID_IShellBrowser, reinterpret_cast<void**>(&pSB));
+    if (FAILED(hr) || !pSB) { pUnk->Release(); return hr; }
+
+    IShellView* pSV = nullptr;
+    hr = pSB->QueryActiveShellView(&pSV);
+    if (FAILED(hr) || !pSV) { pSB->Release(); return hr; }
+
+    IFolderView* pFV = nullptr;
+    hr = pSV->QueryInterface(IID_IFolderView, reinterpret_cast<void**>(&pFV));
+    if (FAILED(hr) || !pFV) { pSV->Release(); pSB->Release(); return hr; }
+
+    IPersistFolder2* pPF = nullptr;
+    hr = pFV->GetFolder(IID_IPersistFolder2, reinterpret_cast<void**>(&pPF));
+    if (FAILED(hr) || !pPF) { pFV->Release(); pSV->Release(); pSB->Release(); return hr; }
+
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    hr = pPF->GetCurFolder(&pidl);
+    pPF->Release();
+    pFV->Release();
+    pSV->Release();
+    pSB->Release();
+
+    if (FAILED(hr) || !pidl) return hr;
+
+    BOOL ok = SHGetPathFromIDListW(pidl, outPath);
+    ILFree(pidl);
+    return ok ? S_OK : E_FAIL;
+}
+
+struct ReadHookCtx
+{
+    HWND hwnd;
+    WCHAR path[520];
+    HANDLE doneEvent {};
+    HRESULT hrResult { E_FAIL };
+};
+
 static volatile LONG g_navHookArmed = 0;
 static HHOOK g_getMsgHook {};
 static NavigateHookCtx g_navHookCtx {};
+
+static volatile LONG g_readHookArmed = 0;
+static HHOOK g_readMsgHook {};
+static ReadHookCtx g_readHookCtx {};
 
 static LRESULT CALLBACK ClipboardX_GetMsgProc(_In_ int code, _In_ WPARAM wp, _In_ LPARAM lp)
 {
@@ -224,6 +275,107 @@ static HRESULT NavigateOnDialogUiThread(HWND hDlg, PCWSTR pathW)
     CloseHandle(ev);
     g_navHookCtx.doneEvent = nullptr;
     return hr;
+}
+
+// ---- Read current folder via hook ----
+static LRESULT CALLBACK ClipboardX_GetMsgProc_Read(_In_ int code, _In_ WPARAM wp, _In_ LPARAM lp)
+{
+    if (code < 0)
+        return CallNextHookEx(g_readMsgHook, code, wp, lp);
+
+    if (InterlockedExchange(&g_readHookArmed, 0) != 1)
+        return CallNextHookEx(g_readMsgHook, code, wp, lp);
+
+    HHOOK hookCopy = g_readMsgHook;
+    g_readMsgHook = nullptr;
+    if (hookCopy)
+        UnhookWindowsHookEx(hookCopy);
+
+    NavLogFmtW(L"WH_GETMESSAGE read on dlg UI thread tid=%lu", (unsigned long)GetCurrentThreadId());
+    g_readHookCtx.hrResult = ReadCurrentFolderViaShellBrowser(
+        g_readHookCtx.hwnd, g_readHookCtx.path, 520);
+    if (g_readHookCtx.doneEvent)
+        SetEvent(g_readHookCtx.doneEvent);
+
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+
+static HRESULT ReadOnDialogUiThread(HWND hDlg, WCHAR* outPath, int outPathChars)
+{
+    outPath[0] = L'\0';
+    DWORD tidDlg = GetWindowThreadProcessId(hDlg, nullptr);
+    DWORD tidHere = GetCurrentThreadId();
+    if (!tidDlg)
+        return E_FAIL;
+    if (tidHere == tidDlg)
+        return ReadCurrentFolderViaShellBrowser(hDlg, outPath, outPathChars);
+
+    HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!ev)
+        return E_FAIL;
+
+    ZeroMemory(&g_readHookCtx, sizeof(g_readHookCtx));
+    g_readHookCtx.hwnd = hDlg;
+    g_readHookCtx.doneEvent = ev;
+    g_readHookCtx.hrResult = E_FAIL;
+
+    InterlockedExchange(&g_readHookArmed, 1);
+    g_readMsgHook = SetWindowsHookExW(WH_GETMESSAGE, ClipboardX_GetMsgProc_Read, g_hDllModule, tidDlg);
+    if (!g_readMsgHook)
+    {
+        NavLogFmtW(L"SetWindowsHookEx WH_GETMESSAGE read failed err=%lu", (unsigned long)GetLastError());
+        CloseHandle(ev);
+        return E_FAIL;
+    }
+
+    PostMessageW(hDlg, WM_NULL, 0, 0);
+
+    const DWORD w = WaitForSingleObject(ev, 5000);
+    if (w != WAIT_OBJECT_0)
+    {
+        NavLogFmtW(L"read hook wait %lu (timeout=%d)", (unsigned long)w, w == WAIT_TIMEOUT ? 1 : 0);
+        HHOOK hLeft = (HHOOK)InterlockedExchangePointer((PVOID volatile*)&g_readMsgHook, nullptr);
+        if (hLeft)
+            UnhookWindowsHookEx(hLeft);
+        InterlockedExchange(&g_readHookArmed, 0);
+        CloseHandle(ev);
+        return E_FAIL;
+    }
+
+    const HRESULT hr = g_readHookCtx.hrResult;
+    if (SUCCEEDED(hr))
+        wcsncpy_s(outPath, outPathChars, g_readHookCtx.path, _TRUNCATE);
+    CloseHandle(ev);
+    g_readHookCtx.doneEvent = nullptr;
+    return hr;
+}
+
+struct ReadPayload
+{
+    HWND hwnd;
+    WCHAR path[520];
+};
+
+extern "C" __declspec(dllexport) DWORD WINAPI ClipboardX_RemoteReadCurrentFolder(_In_ LPVOID param)
+{
+    auto* p = static_cast<ReadPayload*>(param);
+    if (!p || !IsWindow(p->hwnd))
+    {
+        NavLogFmtW(L"Bad read payload hwnd=0x%p", (void*)(p ? p->hwnd : nullptr));
+        return 9;
+    }
+
+    NavLogFmtW(L"ReadEnter hwnd=0x%p", (void*)p->hwnd);
+
+    HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    HRESULT hr = ReadOnDialogUiThread(p->hwnd, p->path, 520);
+
+    if (hrCo == S_OK)
+        CoUninitialize();
+
+    NavLogFmtW(L"ReadDone hr=0x%08X path=%s", (unsigned)hr, p->path);
+    return SUCCEEDED(hr) ? 0 : static_cast<DWORD>(hr & 0xFFFFFFFFUL);
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI ClipboardX_RemoteNavigate(_In_ LPVOID param)

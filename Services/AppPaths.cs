@@ -134,10 +134,18 @@ internal static class AppPaths
         }
         else
         {
+#if DEBUG
+            // dotnet run 调试时复用安装版数据，便于开发调试
+            _isPortable = false;
+            _dataRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                ProductDirName);
+#else
             _isPortable = true;
             var hostDir = GetPortableDataHostDirectory();
             _dataRoot = Path.Combine(hostDir, "Data");
             TryMigrateLegacySingleFileExtractData(_dataRoot);
+#endif
         }
 
         Directory.CreateDirectory(_dataRoot);

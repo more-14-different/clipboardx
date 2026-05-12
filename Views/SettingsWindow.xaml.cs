@@ -34,6 +34,7 @@ public partial class SettingsWindow : Window
     private bool _pendingFileJumpPickerEverythingFolderSearch = true;
 #if CLIPX_FILEJUMP
     private bool _pendingExplorerEverythingQuickFind;
+    private string _pendingExplorerQuickFindOpenMode = "Explorer";
 #endif
     private string _pendingModifierKey;
     private bool _pendingBatchPasteMergeText;
@@ -129,6 +130,8 @@ public partial class SettingsWindow : Window
 #if CLIPX_FILEJUMP
         _pendingExplorerEverythingQuickFind = settings.ExplorerEverythingQuickFindEnabled;
         ExplorerEverythingQuickFindText.Text = _pendingExplorerEverythingQuickFind ? "开启" : "关闭";
+        _pendingExplorerQuickFindOpenMode = settings.ExplorerQuickFindOpenMode == "DirectOpen" ? "DirectOpen" : "Explorer";
+        ExplorerQuickFindOpenModeText.Text = _pendingExplorerQuickFindOpenMode == "DirectOpen" ? "直接打开" : "从资源管理器打开";
         ExplorerEverythingMaxResultsBox.Text = settings.ExplorerEverythingQuickFindMaxResults.ToString();
 #else
         ExplorerEverythingQuickFindText.Text = "—";
@@ -642,6 +645,14 @@ public partial class SettingsWindow : Window
 #endif
     }
 
+    private void ExplorerQuickFindOpenModeCycle_Click(object sender, MouseButtonEventArgs e)
+    {
+#if CLIPX_FILEJUMP
+        _pendingExplorerQuickFindOpenMode = _pendingExplorerQuickFindOpenMode == "Explorer" ? "DirectOpen" : "Explorer";
+        ExplorerQuickFindOpenModeText.Text = _pendingExplorerQuickFindOpenMode == "DirectOpen" ? "直接打开" : "从资源管理器打开";
+#endif
+    }
+
     private static string ModifierDisplayName(string m) => m switch
     {
         "Alt" => "Alt",
@@ -826,6 +837,7 @@ public partial class SettingsWindow : Window
 #if CLIPX_FILEJUMP
         _settings.ExplorerEverythingQuickFindEnabled = _pendingExplorerEverythingQuickFind;
         _settings.ExplorerEverythingQuickFindMaxResults = explorerEvMax;
+        _settings.ExplorerQuickFindOpenMode = _pendingExplorerQuickFindOpenMode;
         _settings.UseFindXSearch = false;
 #endif
         _settings.PreviewMaxLines = previewLines;

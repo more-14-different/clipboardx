@@ -88,12 +88,42 @@ internal static class FileManagerPathCollector
     /// 对任意前台窗口尝试提取其所属文件管理器当前路径；若传入的是子窗口，则自动提升到顶层窗口。
     /// 仅对资源管理器 / TC / XYplorer / Q-Dir 等受支持的文件管理器返回路径。
     /// </summary>
-    public static string? TryGetFolderForWindow(IntPtr hwnd)
+    public static string? TryGetFolderForWindow(IntPtr hwnd, bool fresh = false)
     {
         if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd)) return null;
         var root = Win32.GetAncestor(hwnd, Win32.GA_ROOT);
         if (root == IntPtr.Zero) root = hwnd;
+        if (fresh)
+        {
+            // 绕过缓存直接读取 Explorer 路径
+            var cls = Win32.GetWindowClassName(root);
+            if (cls is "CabinetWClass" or "ExploreWClass")
+                return TryGetExplorerPathForHwndFresh(root);
+        }
         return TryGetFolderForManagerHwnd(root);
+    }
+
+    /// <summary>无缓存地读取 Explorer 窗口当前路径（用于轮询检测路径变化）。</summary>
+    private static string? TryGetExplorerPathForHwndFresh(IntPtr explorerFrameHwnd)
+    {
+        if (explorerFrameHwnd == IntPtr.Zero) return null;
+        var entries = TryEnumerateShellExplorerWindowsUncached();
+        var (comPath, comMatchScore) = MatchBestComPathForExplorerFrameWithScore(explorerFrameHwnd, entries);
+
+        string? uiaPath = null;
+        if (comPath == null || comMatchScore < 4)
+        {
+            try
+            {
+                if (FileDialogJumpHelper.TryReadCurrentFolder(explorerFrameHwnd, out var jumpStyle, relaxed: comPath == null)
+                    && !string.IsNullOrEmpty(jumpStyle))
+                    uiaPath = jumpStyle;
+            }
+            catch { }
+        }
+
+        try { return MergeExplorerComPathWithUiPath(comPath, uiaPath); }
+        catch { return uiaPath ?? comPath; }
     }
 
     /// <summary>按 Z 序遍历顶层窗口，收集各文件管理器当前路径；末尾可附加「常用路径」。</summary>

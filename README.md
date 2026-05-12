@@ -296,6 +296,13 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 结构化列表见 **[CHANGELOG.md](CHANGELOG.md)**（推送 `v*` 标签后，GitHub Release 会从中截取当前版本的 **更新内容**）。以下为 README 内便于浏览的摘录；安装包见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**。
 
+### v1.6.3
+
+- **收藏按钮修复**：DLL 注入读取文件对话框路径，修复收藏错误路径问题；注入调用移至后台线程消除卡顿
+- **Explorer 路径变化检测**：轮询监听资源管理器内导航，切回对话框时自动同步最新路径
+- **Everything 选中操作配置**：新增「直接打开」模式，选中结果后导航前台文件对话框到目标路径
+- **Everything Escape 修复**：弹窗获得焦点后 Escape 可正常关闭
+
 ### v1.6.1
 
 - **Everything 快速筛选扩展**：在「此电脑」「库」等非常规文件夹以及桌面中键入时，支持全盘自动筛选并弹出结果

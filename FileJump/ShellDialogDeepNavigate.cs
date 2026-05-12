@@ -160,6 +160,103 @@ internal static class ShellDialogDeepNavigate
         }
     }
 
+    /// <summary>
+    /// 通过 DLL 注入在对话框宿主进程内调用 IShellBrowser 读取当前文件夹路径。
+    /// 这是读取文件对话框路径最可靠的方式，不受 UIA/CDM 限制。
+    /// </summary>
+    public static bool TryReadCurrentFolderInject(IntPtr dialogHwnd, out string folder)
+    {
+        folder = "";
+        if (dialogHwnd == IntPtr.Zero || !Win32.IsWindow(dialogHwnd)) return false;
+
+        Win32.GetWindowThreadProcessId(dialogHwnd, out var pid);
+        if (pid == 0) return false;
+
+        const string readExportName = "ClipboardX_RemoteReadCurrentFolder";
+        var access = ProcessCreateThread | ProcessQueryInformation | ProcessVmOperation | ProcessVmRead | ProcessVmWrite;
+        var hProcess = OpenProcess(access, false, pid);
+        if (hProcess == IntPtr.Zero) return false;
+
+        try
+        {
+            var targetIs64 = IsTargetProcess64Bit(hProcess);
+            if (!Environment.Is64BitProcess && targetIs64) return false;
+
+            var crossArch = Environment.Is64BitProcess != targetIs64;
+            var dllFileName = targetIs64 ? "ClipboardXShellNavigate.dll" : "ClipboardXShellNavigate32.dll";
+            var dllFullPath = Path.Combine(AppContext.BaseDirectory, dllFileName);
+            if (!File.Exists(dllFullPath)) return false;
+
+            if (!EnsureRemoteDllLoaded(hProcess, dllFullPath, dllFileName, crossArch, out var remoteBase))
+                return false;
+
+            var remoteFn = crossArch
+                ? FindExportInRemoteModule(hProcess, remoteBase, readExportName)
+                : GetRemoteExportAddress(hProcess, remoteBase, dllFullPath, readExportName);
+            if (remoteFn == IntPtr.Zero) return false;
+
+            // ReadPayload: HWND + WCHAR[520]
+            var payload = BuildReadPayload(dialogHwnd, targetIs64);
+            var pPayload = VirtualAllocEx(hProcess, IntPtr.Zero, (nuint)payload.Length, MemCommit | MemReserve, PageReadWrite);
+            if (pPayload == IntPtr.Zero) return false;
+
+            try
+            {
+                if (!WriteProcessMemory(hProcess, pPayload, payload, (nuint)payload.Length, out _))
+                    return false;
+
+                var t = CreateRemoteThread(hProcess, IntPtr.Zero, 0, remoteFn, pPayload, 0, IntPtr.Zero);
+                if (t == IntPtr.Zero) return false;
+                try
+                {
+                    WaitForSingleObject(t, 10000);
+                    GetExitCodeThread(t, out var code);
+                    if (code != 0) return false;
+
+                    // 读回 payload 中的 path 字段
+                    var result = new byte[payload.Length];
+                    UIntPtr read = 0;
+                    if (!ReadProcessMemory(hProcess, pPayload, result, (nuint)result.Length, out read))
+                        return false;
+
+                    // path 偏移：64位下 8 字节 HWND，32位下 4 字节 HWND
+                    var pathOffset = targetIs64 ? 8 : 4;
+                    folder = Encoding.Unicode.GetString(result, pathOffset, (MaxPathChars - 1) * 2).TrimEnd('\0');
+                    return !string.IsNullOrEmpty(folder);
+                }
+                finally
+                {
+                    CloseHandle(t);
+                }
+            }
+            finally
+            {
+                VirtualFreeEx(hProcess, pPayload, 0, MemRelease);
+            }
+        }
+        finally
+        {
+            CloseHandle(hProcess);
+        }
+    }
+
+    private static byte[] BuildReadPayload(IntPtr hwnd, bool ptr64)
+    {
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+        if (ptr64)
+            bw.Write(hwnd.ToInt64());
+        else
+            bw.Write(hwnd.ToInt32());
+
+        // WCHAR[520] 零初始化
+        var total = ptr64 ? 8 + MaxPathChars * 2 : 4 + MaxPathChars * 2;
+        while (ms.Length < total)
+            bw.Write((byte)0);
+
+        return ms.ToArray();
+    }
+
     private static bool IsTargetProcess64Bit(IntPtr hProcess)
     {
         if (!Environment.Is64BitOperatingSystem)

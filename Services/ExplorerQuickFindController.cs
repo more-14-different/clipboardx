@@ -128,7 +128,15 @@ public sealed class ExplorerQuickFindController : IDisposable
         var fg = Win32.GetForegroundWindow();
         Win32.GetWindowThreadProcessId(fg, out var fgPid);
         if ((int)fgPid == Environment.ProcessId)
+        {
+            // 弹窗自身获得前台时，仍需拦截 Escape 关闭会话
+            if (_sessionActive && kb.vkCode == Win32.VK_ESCAPE)
+            {
+                _dispatcher.BeginInvoke(EndSession);
+                return (IntPtr)1;
+            }
             return Win32.CallNextHookEx(_hook, nCode, wParam, lParam);
+        }
 
         _hookNCode = nCode;
         _hookWParam = wParam;
@@ -337,7 +345,7 @@ public sealed class ExplorerQuickFindController : IDisposable
                 var frame = _sessionExplorerFrame;
                 EndSession();
                 if (!string.IsNullOrEmpty(path))
-                    _ = Task.Run(() => NavigateAndSelect(frame, path!));
+                    _ = Task.Run(() => NavigateAndSelect(frame, path!, _settings.ExplorerQuickFindOpenMode));
                 return;
 
             case Win32.VK_UP:
@@ -446,7 +454,7 @@ public sealed class ExplorerQuickFindController : IDisposable
         var frame = _sessionExplorerFrame;
         EndSession();
         if (!string.IsNullOrEmpty(fullPath))
-            _ = Task.Run(() => NavigateAndSelect(frame, fullPath));
+            _ = Task.Run(() => NavigateAndSelect(frame, fullPath, _settings.ExplorerQuickFindOpenMode));
     }
 
     private void QuickSelectAndActivate(int index)
@@ -456,7 +464,7 @@ public sealed class ExplorerQuickFindController : IDisposable
         if (string.IsNullOrEmpty(path)) return;
         var frame = _sessionExplorerFrame;
         EndSession();
-        _ = Task.Run(() => NavigateAndSelect(frame, path!));
+        _ = Task.Run(() => NavigateAndSelect(frame, path!, _settings.ExplorerQuickFindOpenMode));
     }
 
     private void EndSession()
@@ -737,8 +745,27 @@ public sealed class ExplorerQuickFindController : IDisposable
     /// 在资源管理器中就地导航到目标文件所在文件夹并选中该文件。
     /// Shell COM late-binding → fallback SHOpenFolderAndSelectItems。
     /// </summary>
-    private static void NavigateAndSelect(IntPtr explorerFrame, string targetFullPath)
+    private static void NavigateAndSelect(IntPtr explorerFrame, string targetFullPath, string openMode)
     {
+        // DirectOpen 模式：找到前台文件对话框并导航到目标文件所在目录
+        if (openMode == "DirectOpen")
+        {
+            try
+            {
+                var fg = Win32.GetForegroundWindow();
+                if (fg != IntPtr.Zero && FileDialogJumpHelper.IsLikelyFileDialog(fg))
+                {
+                    var targetDir = Path.GetDirectoryName(targetFullPath);
+                    if (!string.IsNullOrEmpty(targetDir))
+                    {
+                        FileDialogJumpHelper.TryNavigateToFolder(fg, targetDir);
+                        return;
+                    }
+                }
+            }
+            catch { /* fallback to Explorer mode */ }
+        }
+
         try
         {
             if (TryNavigateViaShellCom(explorerFrame, targetFullPath))
@@ -825,7 +852,18 @@ public sealed class ExplorerQuickFindController : IDisposable
                 {
                     matchedWin.GetType().InvokeMember("Navigate",
                         BindingFlags.InvokeMethod, null, matchedWin, new object[] { targetDir });
-                    Thread.Sleep(400);
+                    // 轮询等待 Explorer 完成导航（SSD 通常 < 100ms），比固定 Sleep(400) 更快
+                    for (int poll = 0; poll < 10; poll++)
+                    {
+                        Thread.Sleep(50);
+                        try
+                        {
+                            var afterPath = ReadShellWindowPath(matchedWin);
+                            if (string.Equals(NormPath(afterPath), NormPath(targetDir), StringComparison.OrdinalIgnoreCase))
+                                break;
+                        }
+                        catch { break; }
+                    }
                 }
 
                 TrySelectItem(matchedWin, targetName);

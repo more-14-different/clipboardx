@@ -69,6 +69,24 @@ public partial class PopupWindow : Window
             {
                 if (msg == Win32.WM_LBUTTONUP)
                 {
+                    // 松手时刷新节流期间累积的最后一帧位置
+                    if (_hasPendingDragMove)
+                    {
+                        _hasPendingDragMove = false;
+                        _isOurSetWindowPos = true;
+                        try
+                        {
+                            Win32.SetWindowPos(_hwnd, IntPtr.Zero,
+                                _pendingDragX, _pendingDragY, 0, 0,
+                                Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE
+                                | Win32.SWP_NOSENDCHANGING);
+                        }
+                        finally { _isOurSetWindowPos = false; }
+                        Win32.GetWindowRect(_hwnd, out var rcPending);
+                        _hookAuthPhysLeft = rcPending.Left;
+                        _hookAuthPhysTop = rcPending.Top;
+                    }
+
                     // 壳/DWM 可能在钩子最后一帧 WM_MOUSEMOVE 与松手之间改写 HWND；此处立即对齐权威位置，减少与 BeginInvoke(Sync) 的竞态。
                     if (Win32.GetWindowRect(_hwnd, out var rcUp))
                     {
@@ -126,6 +144,20 @@ public partial class PopupWindow : Window
                         {
                             var nx = rc.Left + dx;
                             var ny = rc.Top + dy;
+
+                            // 节流：限制 SetWindowPos 频率到 ~120fps（8ms 间隔），减少 DWM/Shell 争用
+                            var nowTick = Environment.TickCount64;
+                            if (nowTick - _lastDragMoveTick < 8)
+                            {
+                                _pendingDragX = nx;
+                                _pendingDragY = ny;
+                                _hasPendingDragMove = true;
+                                _dragLastPt = curPt;
+                                return Win32.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+                            }
+                            _lastDragMoveTick = nowTick;
+                            _hasPendingDragMove = false;
+
                             _isOurSetWindowPos = true;
                             try
                             {
@@ -311,9 +343,15 @@ public partial class PopupWindow : Window
         {
             if (_appSettings == null) return;
             if (dialogHwnd == IntPtr.Zero || !Win32.IsWindow(dialogHwnd)) return;
-            if (!FileDialogJumpHelper.TryReadCurrentFolder(dialogHwnd, out var folder)
-                || string.IsNullOrEmpty(folder)) return;
-            RememberLastDialogFolder(folder);
+            // DLL 注入读取路径较慢，放到后台线程避免阻塞 UI
+            var capturedDlg = dialogHwnd;
+            var th = new Thread(() =>
+            {
+                if (!FileDialogJumpHelper.TryReadCurrentFolder(capturedDlg, out var folder)
+                    || string.IsNullOrEmpty(folder)) return;
+                Dispatcher.BeginInvoke(() => RememberLastDialogFolder(folder), DispatcherPriority.Background);
+            }) { IsBackground = true, Name = "ClipboardX-PersistFolder" };
+            th.Start();
         }
         catch (Exception ex)
         {

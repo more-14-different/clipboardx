@@ -42,11 +42,25 @@
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0" Margin="16,14,16,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📁" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
                         <TextBlock Text="跳转到文件夹" FontSize="15" FontWeight="SemiBold"
                                    Foreground="{DynamicResource PrimaryText}" VerticalAlignment="Center"/>
                     </StackPanel>
+                    <Button x:Name="BtnAddCurrentToFavorites" Grid.Column="1"
+                            Content="⭐ 收藏当前路径" FontSize="11"
+                            Padding="8,4" Margin="8,0,0,0"
+                            Cursor="Hand"
+                            Click="BtnAddCurrentToFavorites_Click"
+                            Background="Transparent"
+                            Foreground="{DynamicResource MutedText}"
+                            BorderThickness="0"
+                            VerticalAlignment="Center"
+                            ToolTip="将文件对话框当前所在目录加入收藏"/>
                 </Grid>
 
                 <Border Grid.Row="1" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource ThemeSeparator}"/>

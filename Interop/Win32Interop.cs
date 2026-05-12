@@ -489,6 +489,16 @@ internal static class Win32
     public const uint WM_GETTEXT = 0x000D;
     public const uint WM_GETTEXTLENGTH = 0x000E;
 
+    /// <summary>CDM_GETFOLDERPATH — 向 #32770 共用对话框发送以获取当前文件夹路径（WM_USER + 0x66）。</summary>
+    public const uint CDM_GETFOLDERPATH = 0x0400 + 0x0066;
+
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam,
+        uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
     [DllImport("user32.dll")]
     public static extern IntPtr GetTopWindow(IntPtr hWnd);
 

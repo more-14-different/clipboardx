@@ -20,12 +20,12 @@ public partial class App : Application
         var menu = new WinForms.ContextMenuStrip { ShowItemToolTips = true };
 #if CLIPX_CLIPBOARD
         menu.Items.Add($"显示 ({_settings.HotkeyDisplayName})", null, (_, _) =>
-            Dispatcher.Invoke(() => _popup?.TogglePopup()));
+            Dispatcher.BeginInvoke(() => _popup?.TogglePopup()));
 #endif
         menu.Items.Add("设置", null, (_, _) =>
-            Dispatcher.Invoke(OpenSettings));
+            Dispatcher.BeginInvoke(() => OpenSettings()));
         menu.Items.Add("关于", null, (_, _) =>
-            Dispatcher.Invoke(ShowAboutDialog));
+            Dispatcher.BeginInvoke(() => ShowAboutDialog()));
         menu.Items.Add("检查更新…", null, (_, _) =>
             _ = CheckForUpdatesAsync());
 #if DEBUG
@@ -38,7 +38,7 @@ public partial class App : Application
         if (PerUserInstall.IsRunningFromInstallLocation())
         {
             menu.Items.Add("卸载…", null, (_, _) =>
-                Dispatcher.Invoke(PerUserInstall.PromptUninstallFromTray));
+                Dispatcher.BeginInvoke(() => PerUserInstall.PromptUninstallFromTray()));
         }
         else if (File.Exists(PerUserInstall.InstalledExecutablePath))
         {
@@ -61,18 +61,18 @@ public partial class App : Application
                     MessageBoxImage.Information);
 #else
                 if (PerUserInstall.TryInstallToUserProgramsAndRelaunch(startupArgs))
-                    Dispatcher.Invoke(Shutdown);
+                    Dispatcher.BeginInvoke(() => Shutdown());
 #endif
             });
         }
 
         menu.Items.Add("退出", null, (_, _) =>
-            Dispatcher.Invoke(Shutdown));
+            Dispatcher.BeginInvoke(() => Shutdown()));
         _trayIcon.ContextMenuStrip = menu;
 
 #if CLIPX_CLIPBOARD
         _trayIcon.DoubleClick += (_, _) =>
-            Dispatcher.Invoke(() => _popup?.TogglePopup());
+            Dispatcher.BeginInvoke(() => _popup?.TogglePopup());
 #endif
 
 #if DEBUG

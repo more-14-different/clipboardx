@@ -158,6 +158,9 @@ public partial class PopupWindow : Window
     private bool _userHasResized;
     private bool _isResizing;
     private Win32.POINT _dragLastPt;
+    private long _lastDragMoveTick;
+    private int _pendingDragX, _pendingDragY;
+    private bool _hasPendingDragMove;
     /// <summary>标题栏拖动时由鼠标钩 SetWindowPos 维护的 HWND 物理左上角；用于识别 Shell/贴靠对窗口的偷跑。</summary>
     private int _hookAuthPhysLeft, _hookAuthPhysTop;
     /// <summary>标题栏拖动松手后第一次 Sync：若 HWND 已被壳/DWM 甩离钩子最后一帧位置则拉回（与 H15 日志配对）。</summary>
@@ -261,6 +264,10 @@ public partial class PopupWindow : Window
     /// <summary>最近一次离开外部文件管理器时记录到的路径；用于切回文件对话框时优先同步。</summary>
     private string _lastExternalFolder = "";
     private IntPtr _lastExternalManagerRoot = IntPtr.Zero;
+    /// <summary>Picker 打开时轮询 Explorer 窗口路径变化的定时器。</summary>
+    private System.Windows.Threading.DispatcherTimer? _explorerPathPollTimer;
+    private string _explorerPathPollLastPath = "";
+    private IntPtr _explorerPathPollHwnd;
 
     public event Action? SettingsRequested;
 
@@ -940,7 +947,7 @@ public partial class PopupWindow : Window
     /// <summary>
     /// 读剪贴板时其它进程常短时占用 → CLIPBRD_E_CANT_OPEN；与 TrySetClipboard 类似做短暂重试，避免 monitor outer catch 误判整次更新失败。
     /// </summary>
-    private static bool TryReadClipboardBool(Func<bool> read, string tag, int maxRetries = 2, int delayMs = 18)
+    private static bool TryReadClipboardBool(Func<bool> read, string tag, int maxRetries = 4, int delayMs = 5)
     {
         for (var i = 0; i < maxRetries; i++)
         {
@@ -963,7 +970,7 @@ public partial class PopupWindow : Window
         return false;
     }
 
-    private static T? TryReadClipboard<T>(Func<T> read, string tag, int maxRetries = 2, int delayMs = 18) where T : class
+    private static T? TryReadClipboard<T>(Func<T> read, string tag, int maxRetries = 4, int delayMs = 5) where T : class
     {
         for (var i = 0; i < maxRetries; i++)
         {
@@ -3342,6 +3349,7 @@ public partial class PopupWindow : Window
                     {
                         try { _activeFileJumpPicker.Close(); } catch { }
                         _activeFileJumpPicker = null;
+                        StopExplorerPathPoll();
                     }
                 }, DispatcherPriority.Send);
             }
@@ -3375,9 +3383,9 @@ public partial class PopupWindow : Window
         if (_activeFileJumpPicker == null)
         {
             TryRememberFolderFromDialog(prev);
-            TryRememberExternalManagerFolder(prev);
-            TryRememberExternalManagerFolder(hwnd);
         }
+        TryRememberExternalManagerFolder(prev);
+        TryRememberExternalManagerFolder(hwnd);
 
         if (_activeFileJumpPicker == null)
         {
@@ -3406,6 +3414,15 @@ public partial class PopupWindow : Window
         else
         {
             var dlgPick = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(hwnd);
+            var dialogForForeground = dlgPick;
+
+            // picker 打开时切回文件对话框 → 触发 auto-sync
+            if (dialogForForeground != IntPtr.Zero)
+                TryAutoSyncPathOnDialogReturn(hwnd, prev);
+            // picker 打开时切到外部管理器 → 触发采集刷新列表（新 Explorer 路径会被加入候选）
+            else if (dialogForForeground == IntPtr.Zero && _activeFileJumpPicker != null)
+                TryRefreshPickerForNewExternalFolder(hwnd);
+
             UpdateFileJumpClickToNavigateArm(dlgPick != IntPtr.Zero ? dlgPick : hwnd);
         }
 
@@ -3466,15 +3483,21 @@ public partial class PopupWindow : Window
                     if (!Win32.IsWindow(target)) return;
                     var fgSnap = Win32.GetForegroundWindow();
                     if (FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(fgSnap) != target) return;
-                    if (FileDialogJumpHelper.TryReadCurrentFolder(target, out var folder)
-                        && !string.IsNullOrEmpty(folder))
+                    // DLL 注入读取路径较慢，放到后台线程避免阻塞 UI
+                    var capturedTarget = target;
+                    var capturedPhase = p;
+                    var th = new Thread(() =>
                     {
-                        RememberLastDialogFolder(folder);
-                        return;
-                    }
-
-                    if (p < 2)
-                        SchedulePhase(p + 1);
+                        if (FileDialogJumpHelper.TryReadCurrentFolder(capturedTarget, out var folder)
+                            && !string.IsNullOrEmpty(folder))
+                        {
+                            Dispatcher.BeginInvoke(() => RememberLastDialogFolder(folder), DispatcherPriority.Background);
+                            return;
+                        }
+                        if (capturedPhase < 2)
+                            Dispatcher.BeginInvoke(() => SchedulePhase(capturedPhase + 1), DispatcherPriority.Background);
+                    }) { IsBackground = true, Name = "ClipboardX-SnapshotRead" };
+                    th.Start();
                 };
                 timer.Start();
             }
@@ -3490,10 +3513,15 @@ public partial class PopupWindow : Window
         if (!Win32.IsWindow(previousHwnd)) return;
         var dlg = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(previousHwnd);
         if (dlg == IntPtr.Zero) return;
-        if (!FileDialogJumpHelper.TryReadCurrentFolder(dlg, out var folder)
-            || string.IsNullOrEmpty(folder)) return;
-
-        RememberLastDialogFolder(folder);
+        // DLL 注入读取路径较慢，放到后台线程避免阻塞 UI
+        var capturedDlg = dlg;
+        var th = new Thread(() =>
+        {
+            if (!FileDialogJumpHelper.TryReadCurrentFolder(capturedDlg, out var folder)
+                || string.IsNullOrEmpty(folder)) return;
+            Dispatcher.BeginInvoke(() => RememberLastDialogFolder(folder), DispatcherPriority.Background);
+        }) { IsBackground = true, Name = "ClipboardX-RememberFolder" };
+        th.Start();
     }
 
     private void RememberLastDialogFolder(string folder)
@@ -3667,7 +3695,7 @@ public partial class PopupWindow : Window
         {
             _fileJumpPickerSession++;
             ClearFileJumpDoubleTapState();
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path, allowShellInject);
+            NavigateToFolderInBackground(dialogHwnd, candidates[prefer].Path, allowShellInject);
             Dispatcher.BeginInvoke(() => _activeFileJumpPicker?.Close(),
                 System.Windows.Threading.DispatcherPriority.Normal);
             return;
@@ -3684,7 +3712,7 @@ public partial class PopupWindow : Window
             _fileJumpPickerSession++;
             ClearFileJumpDoubleTapState();
             var path = candidates[prefer].Path;
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, path, allowShellInject);
+            NavigateToFolderInBackground(dialogHwnd, path, allowShellInject);
             Dispatcher.BeginInvoke(() => _activeFileJumpPicker?.Close(),
                 System.Windows.Threading.DispatcherPriority.Normal);
             return;
@@ -3693,12 +3721,37 @@ public partial class PopupWindow : Window
         if (!_appSettings.FileJumpPickerAutoPopup)
         {
             ClearFileJumpDoubleTapState();
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path, allowShellInject);
+            NavigateToFolderInBackground(dialogHwnd, candidates[prefer].Path, allowShellInject);
             return;
         }
 
         ScheduleFileJumpPickerOpen(dialogHwnd, candidates.ToList(), prefer, armHotkeyDoubleTap: true, allowShellInject,
             autoForegroundStickyMode: false, afterPickerAssigned);
+    }
+
+    /// <summary>在后台 STA 线程执行文件对话框导航，避免 Thread.Sleep 阻塞 UI 线程。</summary>
+    private static void NavigateToFolderInBackground(IntPtr dialogHwnd, string path, bool allowShellInject,
+        Action<bool>? onCompleted = null)
+    {
+        var th = new Thread(() =>
+        {
+            try
+            {
+                var ok = FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, path, allowShellInject);
+                onCompleted?.Invoke(ok);
+            }
+            catch (Exception ex)
+            {
+                ShellNavigateLog.Write("filejump", "NavigateToFolderInBackground: " + ex);
+                onCompleted?.Invoke(false);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "ClipboardX-FileJump-Navigate",
+        };
+        th.SetApartmentState(ApartmentState.STA);
+        th.Start();
     }
 
     /// <summary>完整采集（含 UIA）完成后刷新已打开的跳转列表。</summary>
@@ -3813,6 +3866,110 @@ public partial class PopupWindow : Window
         var root = Win32.GetAncestor(dialogHwnd, Win32.GA_ROOT);
         if (root == IntPtr.Zero || !ActivePickerMatchesDialog(root)) return;
         _activeFileJumpPicker.RefreshCandidatesFromExternal(full);
+    }
+
+    /// <summary>
+    /// picker 打开时切换到外部文件管理器，触发一次采集以刷新 picker 列表（将新 Explorer 路径加入候选）。
+    /// </summary>
+    private void TryRefreshPickerForNewExternalFolder(IntPtr foregroundHwnd)
+    {
+        if (_activeFileJumpPicker == null) return;
+        if (_appSettings == null) return;
+
+        var dialogHwnd = _activeFileJumpPicker.OwnerDialogHwnd;
+        if (dialogHwnd == IntPtr.Zero || !Win32.IsWindow(dialogHwnd)) return;
+
+        var mem = _appSettings.LastFileDialogFolder?.Trim();
+        var recentCapture = CopyRecentForJump(_appSettings);
+
+        unchecked { _fileJumpAutoSyncCollectGen++; }
+        var gen = _fileJumpAutoSyncCollectGen;
+        var dialogCapture = dialogHwnd;
+
+        var th = new Thread(() =>
+        {
+            List<FileJumpCandidate> candidates;
+            try
+            {
+                candidates = FileManagerPathCollector.CollectCandidates(dialogCapture, mem,
+                    recentFolders: recentCapture);
+            }
+            catch { return; }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (gen != _fileJumpAutoSyncCollectGen) return;
+                TryJumpFileDialogRefreshPickerIfOpen(dialogCapture, candidates);
+            }, DispatcherPriority.Normal);
+        })
+        {
+            IsBackground = true,
+            Name = "ClipboardX-FileJump-RefreshOnExternal",
+        };
+        th.SetApartmentState(ApartmentState.STA);
+        th.Start();
+
+        // 启动轮询：检测 Explorer 窗口内导航导致的路径变化
+        StartExplorerPathPoll(foregroundHwnd);
+    }
+
+    /// <summary>Picker 打开时，定时轮询指定 Explorer 窗口的路径变化并刷新列表。</summary>
+    private void StartExplorerPathPoll(IntPtr explorerHwnd)
+    {
+        StopExplorerPathPoll();
+        if (explorerHwnd == IntPtr.Zero || !Win32.IsWindow(explorerHwnd)) return;
+        if (_activeFileJumpPicker == null) return;
+
+        _explorerPathPollHwnd = explorerHwnd;
+        _explorerPathPollLastPath = FileManagerPathCollector.TryGetFolderForWindow(explorerHwnd, fresh: true) ?? "";
+
+        _explorerPathPollTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(600)
+        };
+        _explorerPathPollTimer.Tick += ExplorerPathPollTick;
+        _explorerPathPollTimer.Start();
+    }
+
+    private void StopExplorerPathPoll()
+    {
+        if (_explorerPathPollTimer != null)
+        {
+            _explorerPathPollTimer.Stop();
+            _explorerPathPollTimer.Tick -= ExplorerPathPollTick;
+            _explorerPathPollTimer = null;
+        }
+        _explorerPathPollLastPath = "";
+        _explorerPathPollHwnd = IntPtr.Zero;
+    }
+
+    private void ExplorerPathPollTick(object? sender, EventArgs e)
+    {
+        if (_activeFileJumpPicker == null || _explorerPathPollHwnd == IntPtr.Zero)
+        {
+            StopExplorerPathPoll();
+            return;
+        }
+        if (!Win32.IsWindow(_explorerPathPollHwnd))
+        {
+            StopExplorerPathPoll();
+            return;
+        }
+        // 前台已不在该 Explorer 窗口，停止轮询
+        var fg = Win32.GetForegroundWindow();
+        if (fg != _explorerPathPollHwnd)
+        {
+            StopExplorerPathPoll();
+            return;
+        }
+
+        var currentPath = FileManagerPathCollector.TryGetFolderForWindow(_explorerPathPollHwnd, fresh: true) ?? "";
+        if (string.Equals(currentPath, _explorerPathPollLastPath, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // 路径变化了，刷新 picker 列表
+        _explorerPathPollLastPath = currentPath;
+        TryRefreshPickerForNewExternalFolder(_explorerPathPollHwnd);
     }
 
     /// <summary>
@@ -3999,7 +4156,7 @@ public partial class PopupWindow : Window
         var autoNavigate = _appSettings.FileJumpAutoOnFirstClick;
         if (autoNavigate)
         {
-            FileDialogJumpHelper.TryNavigateToFolder(dialogHwnd, candidates[prefer].Path, allowShellInject);
+            NavigateToFolderInBackground(dialogHwnd, candidates[prefer].Path, allowShellInject);
             _fileJumpAutoFirstJumpDoneRoot = dialogRootNow;
             DisarmFileJumpClickToNavigate();
         }
@@ -4066,11 +4223,16 @@ public partial class PopupWindow : Window
                 if (!IsForegroundFocusOnFileDialogRoot(rootNow)) return;
 
                 var prefer = PreferCandidateIndex(dialogHwndCapture, candidates);
-                if (FileDialogJumpHelper.TryNavigateToFolder(dialogHwndCapture, candidates[prefer].Path, allowShellInject))
-                {
-                    _fileJumpAutoFirstJumpDoneRoot = rootNow;
-                    DisarmFileJumpClickToNavigate();
-                }
+                var capturedRoot = rootNow;
+                NavigateToFolderInBackground(dialogHwndCapture, candidates[prefer].Path, allowShellInject,
+                    ok =>
+                    {
+                        if (ok)
+                        {
+                            _fileJumpAutoFirstJumpDoneRoot = capturedRoot;
+                            DisarmFileJumpClickToNavigate();
+                        }
+                    });
             }, DispatcherPriority.Normal);
         }
 
@@ -4168,7 +4330,18 @@ public partial class PopupWindow : Window
 
         var allowShellInject = _appSettings.EnableShellNavigateInject;
         var preferLastExternal = ShouldPreferLastExternalFolderForAutoSync(previousForegroundHwnd);
-        var preferredExternalFolder = preferLastExternal ? (_lastExternalFolder?.Trim() ?? "") : "";
+
+        // 直接读取前一个窗口的最新路径，而非使用可能过时的 _lastExternalFolder
+        var preferredExternalFolder = "";
+        if (preferLastExternal && previousForegroundHwnd != IntPtr.Zero)
+        {
+            var directPath = FileManagerPathCollector.TryGetFolderForWindow(previousForegroundHwnd, fresh: true);
+            if (!string.IsNullOrEmpty(directPath) && Directory.Exists(directPath))
+                preferredExternalFolder = directPath.Trim();
+            else if (!string.IsNullOrEmpty(_lastExternalFolder))
+                preferredExternalFolder = _lastExternalFolder.Trim();
+        }
+
         var mem = !string.IsNullOrEmpty(preferredExternalFolder)
             ? preferredExternalFolder
             : _appSettings.LastFileDialogFolder?.Trim();
@@ -4206,25 +4379,34 @@ public partial class PopupWindow : Window
                 if (!_appSettings.FileJumpAutoSyncOnReturn) return;
                 if (string.IsNullOrEmpty(preferredPath)) return;
 
-                string? currentFolder = null;
-
-                // 比较对话框当前路径
-                if (FileDialogJumpHelper.TryReadCurrentFolder(dialogCapture, out var currentFolderRead)
-                    && !string.IsNullOrEmpty(currentFolderRead))
+                // DLL 注入读取路径较慢，放到后台线程避免阻塞 UI
+                var capturedDialog = dialogCapture;
+                var capturedRoot = dialogRootCapture;
+                var capturedPreferred = preferredPath;
+                var capturedAllowInject = allowShellInject;
+                var thRead = new Thread(() =>
                 {
-                    currentFolder = currentFolderRead;
-                    var norm1 = NormalizeFolderPathForCompare(currentFolderRead);
-                    var norm2 = NormalizeFolderPathForCompare(preferredPath);
-                    if (string.Equals(norm1, norm2, StringComparison.OrdinalIgnoreCase))
-                        return;
-                }
+                    string? currentFolder = null;
+                    if (FileDialogJumpHelper.TryReadCurrentFolder(capturedDialog, out var currentFolderRead)
+                        && !string.IsNullOrEmpty(currentFolderRead))
+                    {
+                        currentFolder = currentFolderRead;
+                        var norm1 = NormalizeFolderPathForCompare(currentFolderRead);
+                        var norm2 = NormalizeFolderPathForCompare(capturedPreferred);
+                        if (string.Equals(norm1, norm2, StringComparison.OrdinalIgnoreCase))
+                            return;
+                    }
 
-                if (TryNavigateViaActivePicker(dialogCapture, dialogRootCapture, preferredPath))
-                    return;
-
-                ShellNavigateLog.Write("filejump",
-                    $"auto-sync navigating from \"{currentFolder ?? "(unreadable)"}\" to \"{preferredPath}\"");
-                FileDialogJumpHelper.TryNavigateToFolder(dialogCapture, preferredPath, allowShellInject);
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (TryNavigateViaActivePicker(capturedDialog, capturedRoot, capturedPreferred))
+                            return;
+                        ShellNavigateLog.Write("filejump",
+                            $"auto-sync navigating from \"{currentFolder ?? "(unreadable)"}\" to \"{capturedPreferred}\"");
+                        NavigateToFolderInBackground(capturedDialog, capturedPreferred, capturedAllowInject);
+                    }, DispatcherPriority.Normal);
+                }) { IsBackground = true, Name = "ClipboardX-AutoSyncRead" };
+                thRead.Start();
             }, DispatcherPriority.Normal);
         }
 
@@ -4369,6 +4551,7 @@ public partial class PopupWindow : Window
                     {
                         if (ReferenceEquals(_activeFileJumpPicker, picker))
                             _activeFileJumpPicker = null;
+                        StopExplorerPathPoll();
                         ClearFileJumpDoubleTapState();
                     };
                     // ShowDialog 会开启嵌套消息循环；跳转窗本身已经通过全局钩子/Closed 维护生命周期，
@@ -4408,11 +4591,15 @@ public partial class PopupWindow : Window
                     ShellNavigateLog.Write("filejump", "show jump picker: " + ex);
                     if (picker != null && ReferenceEquals(_activeFileJumpPicker, picker))
                         _activeFileJumpPicker = null;
+                    StopExplorerPathPoll();
                 }
                 finally
                 {
                     if (!shown && picker != null && ReferenceEquals(_activeFileJumpPicker, picker))
+                    {
                         _activeFileJumpPicker = null;
+                        StopExplorerPathPoll();
+                    }
                     _fileJumpPickerOpenInProgress = false;
                 }
             }, DispatcherPriority.Input);
@@ -4588,9 +4775,12 @@ public partial class PopupWindow : Window
 
             var doneRoot = Win32.GetAncestor(dlg, Win32.GA_ROOT);
             DisarmFileJumpClickToNavigate();
-            if (FileDialogJumpHelper.TryNavigateToFolder(dlg, candidates[0].Path, _appSettings.EnableShellNavigateInject)
-                && doneRoot != IntPtr.Zero)
-                _fileJumpAutoFirstJumpDoneRoot = doneRoot;
+            NavigateToFolderInBackground(dlg, candidates[0].Path, _appSettings.EnableShellNavigateInject,
+                ok =>
+                {
+                    if (ok && doneRoot != IntPtr.Zero)
+                        _fileJumpAutoFirstJumpDoneRoot = doneRoot;
+                });
         }
         catch (Exception ex)
         {
@@ -5991,6 +6181,8 @@ public partial class PopupWindow : Window
         if (e.ChangedButton != MouseButton.Left) return;
         e.Handled = true;
         _isDragging = true;
+        _lastDragMoveTick = 0;
+        _hasPendingDragMove = false;
         Win32.GetCursorPos(out _dragLastPt);
         Win32.GetWindowRect(_hwnd, out var rc0);
         _hookAuthPhysLeft = rc0.Left;
