@@ -194,7 +194,7 @@ internal static class GitHubUpdateService
     /// <paramref name="cleanupRoot"/> 为临时根目录（内含 extract 子目录等），脚本结束前会尝试删除。
     /// </summary>
     public static void LaunchDeferredReplaceAndRestart(string extractDir, string installDir, string cleanupRoot,
-        string scriptPath)
+        string scriptPath, int currentPid = 0)
     {
         var extract = EscapeForPowerShellSingleQuoted(Path.GetFullPath(extractDir));
         var install = EscapeForPowerShellSingleQuoted(Path.GetFullPath(installDir));
@@ -204,7 +204,25 @@ internal static class GitHubUpdateService
 
         var sb = new StringBuilder(512);
         sb.AppendLine("$ErrorActionPreference = 'Stop'");
-        sb.AppendLine("Start-Sleep -Seconds 3");
+        if (currentPid > 0)
+        {
+            sb.AppendLine($"$targetPid = {currentPid}");
+            sb.AppendLine("$deadline = (Get-Date).AddSeconds(15)");
+            sb.AppendLine("while ($true) {");
+            sb.AppendLine("  $p = Get-Process -Id $targetPid -ErrorAction SilentlyContinue");
+            sb.AppendLine("  if (!$p -or $p.HasExited) { break }");
+            sb.AppendLine("  if ((Get-Date) -ge $deadline) {");
+            sb.AppendLine("    Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue");
+            sb.AppendLine("    Start-Sleep -Seconds 1");
+            sb.AppendLine("    break");
+            sb.AppendLine("  }");
+            sb.AppendLine("  Start-Sleep -Milliseconds 250");
+            sb.AppendLine("}");
+        }
+        else
+        {
+            sb.AppendLine("Start-Sleep -Seconds 3");
+        }
         sb.AppendLine($"$src = '{extract}'");
         sb.AppendLine($"$dst = '{install}'");
         sb.AppendLine($"$root = '{root}'");

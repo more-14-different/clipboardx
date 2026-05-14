@@ -263,9 +263,7 @@ internal static class FileManagerPathCollector
                     break;
                 case "ThunderRT6FormDC":
                     if (TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var xya))
-                        Add("XYplorer (活动)", xya);
-                    if (TryXyplorerPathFromClip(h, "::copytext get('path', i);", out var xyi))
-                        Add("XYplorer (非活动)", xyi);
+                        Add("XYplorer", xya);
                     break;
                 case "dopus.lister":
                     opusXml ??= TryRunDopusInfoXml(h);
@@ -612,15 +610,6 @@ internal static class FileManagerPathCollector
         ClipboardGate.Enter();
         try
         {
-            string? backup = null;
-            try
-            {
-                if (System.Windows.Clipboard.ContainsText()) backup = System.Windows.Clipboard.GetText();
-            }
-            catch { /* ignore */ }
-
-            try { System.Windows.Clipboard.Clear(); } catch { /* ignore */ }
-
             SendXyplorerCopyData(xyHwnd, script);
             Thread.Sleep(120);
             try
@@ -628,13 +617,6 @@ internal static class FileManagerPathCollector
                 path = System.Windows.Clipboard.GetText()?.Trim() ?? "";
             }
             catch { path = ""; }
-
-            try
-            {
-                if (backup != null) System.Windows.Clipboard.SetText(backup);
-                else System.Windows.Clipboard.Clear();
-            }
-            catch { /* ignore */ }
 
             return Directory.Exists(path);
         }
@@ -646,7 +628,7 @@ internal static class FileManagerPathCollector
 
     private static void SendXyplorerCopyData(IntPtr xyHwnd, string message)
     {
-        var bytes = Encoding.Unicode.GetBytes(message + "\0");
+        var bytes = Encoding.Unicode.GetBytes(message);
         var ptr = Marshal.AllocHGlobal(bytes.Length);
         try
         {

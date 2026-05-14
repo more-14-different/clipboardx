@@ -48,6 +48,7 @@ public partial class SettingsWindow : Window
     private string _pendingPasteSimulationMode = PasteSimulationModes.CtrlV;
     private bool _pendingPasteRequiresDoubleClick;
     private bool _pendingReplaceSystemWinV;
+    private bool _pendingClearHistoryOnExit;
 
     private static readonly string[] ModifierOptions = ["Ctrl", "Alt", "Win", "CapsLock"];
 
@@ -169,6 +170,9 @@ public partial class SettingsWindow : Window
 
         _pendingReplaceSystemWinV = settings.ReplaceSystemWinV;
         ReplaceSystemWinVText.Text = _pendingReplaceSystemWinV ? "开启" : "关闭";
+
+        _pendingClearHistoryOnExit = settings.ClearHistoryOnExit;
+        ClearHistoryOnExitText.Text = _pendingClearHistoryOnExit ? "开启" : "关闭";
 
         CustomFileDialogStore.RulesChanged += OnCustomFileDialogRulesChanged;
         Closed += SettingsWindow_OnClosed;
@@ -591,6 +595,12 @@ public partial class SettingsWindow : Window
         ReplaceSystemWinVText.Text = _pendingReplaceSystemWinV ? "开启" : "关闭";
     }
 
+    private void ClearHistoryOnExit_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingClearHistoryOnExit = !_pendingClearHistoryOnExit;
+        ClearHistoryOnExitText.Text = _pendingClearHistoryOnExit ? "开启" : "关闭";
+    }
+
     private void ShellInjectCycle_Click(object sender, RoutedEventArgs e)
     {
         _pendingEnableShellNavigateInject = !_pendingEnableShellNavigateInject;
@@ -825,6 +835,7 @@ public partial class SettingsWindow : Window
         _settings.RunAsAdministrator = _pendingRunAsAdministrator;
         _settings.CheckUpdatesOnStartup = _pendingCheckUpdatesOnStartup;
         _settings.ReplaceSystemWinV = _pendingReplaceSystemWinV;
+        _settings.ClearHistoryOnExit = _pendingClearHistoryOnExit;
         _settings.EnableShellNavigateInject = _pendingEnableShellNavigateInject;
         _settings.FileJumpPickerFollowMode = FileJumpPickerFollowModes.Normalize(_pendingFileJumpFollowMode);
         _settings.FileJumpPickerOpenWhenDialogForeground = _pendingFileJumpOpenListOnDialogOpen;

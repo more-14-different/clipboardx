@@ -1956,6 +1956,23 @@ public partial class FileDialogJumpPickerWindow : Window
         unchecked { _commitNavigateKeepOpenGen++; }
         var gen = _commitNavigateKeepOpenGen;
         var dlgHwnd = _fileDialogOwnerHwnd;
+
+        // 全局模式（无文件对话框）：直接在资源管理器中打开文件夹
+        if (dlgHwnd == IntPtr.Zero)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true,
+                    Verb = "open"
+                });
+            }
+            catch { /* ignore */ }
+            Close();
+            return;
+        }
         var allowInject = _settings.EnableShellNavigateInject;
         var memBefore = _settings.LastFileDialogFolder?.Trim();
 

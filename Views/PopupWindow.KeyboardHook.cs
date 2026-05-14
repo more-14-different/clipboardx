@@ -44,9 +44,39 @@ public partial class PopupWindow : Window
     }
 
     /// <summary>
-    /// 低级钩子里拦截物理 Alt KeyUp 后，注入 Ctrl Down → Ctrl Up → Alt Up（均带注入标志），
-    /// 供宿主将松键视为带 Ctrl 的收尾而非单独 Alt，避免 VS Code 等菜单栏抢焦点。
+    /// Win+V 拦截后吞掉 Win KeyUp，注入 Escape（关闭可能闪出的开始菜单）+ 合成 Win KeyUp（重置系统 Win 键状态）。
     /// </summary>
+    private static void InjectWinKeyUpReset(Win32.KBDLLHOOKSTRUCT kb)
+    {
+        uint ext = (kb.flags & 0x01) != 0 ? Win32.KEYEVENTF_EXTENDEDKEY : 0u;
+        var inputs = new Win32.INPUT[3];
+
+        // Escape：关闭可能闪出的开始菜单
+        inputs[0].type = Win32.INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = (ushort)Win32.VK_ESCAPE;
+        inputs[0].u.ki.wScan = 0;
+        inputs[0].u.ki.dwFlags = 0;
+        inputs[0].u.ki.time = 0;
+        inputs[0].u.ki.dwExtraInfo = IntPtr.Zero;
+
+        inputs[1].type = Win32.INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = (ushort)Win32.VK_ESCAPE;
+        inputs[1].u.ki.wScan = 0;
+        inputs[1].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+        inputs[1].u.ki.time = 0;
+        inputs[1].u.ki.dwExtraInfo = IntPtr.Zero;
+
+        // 合成 Win KeyUp：重置系统 Win 键状态
+        inputs[2].type = Win32.INPUT_KEYBOARD;
+        inputs[2].u.ki.wVk = (ushort)kb.vkCode;
+        inputs[2].u.ki.wScan = 0;
+        inputs[2].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP | ext;
+        inputs[2].u.ki.time = 0;
+        inputs[2].u.ki.dwExtraInfo = IntPtr.Zero;
+
+        Win32.SendInput(3, inputs, Marshal.SizeOf<Win32.INPUT>());
+    }
+
     private static void InjectSyntheticHotkeyAltChordCleanup(Win32.KBDLLHOOKSTRUCT kb)
     {
         uint ext = (kb.flags & 0x01) != 0 ? Win32.KEYEVENTF_EXTENDEDKEY : 0u;
@@ -175,9 +205,19 @@ public partial class PopupWindow : Window
                 // 触发剪贴板弹窗
                 Dispatcher.BeginInvoke(TogglePopup);
 #endif
+                _winVIntercepted = true;
                 // 拦截按键，不传递给系统
                 return (IntPtr)1;
             }
+        }
+
+        // Win+V 拦截后：吞掉 Win KeyUp 防止开始菜单弹出，然后注入 Escape（关闭可能闪出的开始菜单）
+        // + 合成 Win KeyUp（重置系统 Win 键状态，避免 Win 键"卡住"）
+        if (isKeyUp && _winVIntercepted && (kb.vkCode == 0x5B || kb.vkCode == 0x5C))
+        {
+            _winVIntercepted = false;
+            InjectWinKeyUpReset(kb);
+            return (IntPtr)1;
         }
 
 #if CLIPX_CLIPBOARD

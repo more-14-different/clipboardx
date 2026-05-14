@@ -310,7 +310,8 @@ public partial class App : Application
                         MessageBoxImage.Question) != MessageBoxResult.Yes)
                     return;
 
-                GitHubUpdateService.LaunchDeferredReplaceAndRestart(extractDir, installDir, staging, ps1);
+                GitHubUpdateService.LaunchDeferredReplaceAndRestart(extractDir, installDir, staging, ps1,
+                    System.Diagnostics.Process.GetCurrentProcess().Id);
                 updateLaunched = true;
                 Shutdown();
             }
@@ -378,6 +379,7 @@ public partial class App : Application
             _settings.RunAsAdministrator = copy.RunAsAdministrator;
             _settings.CheckUpdatesOnStartup = copy.CheckUpdatesOnStartup;
             _settings.ReplaceSystemWinV = copy.ReplaceSystemWinV;
+            _settings.ClearHistoryOnExit = copy.ClearHistoryOnExit;
             // 启用/禁用系统剪贴板历史（Win+V）
             SystemClipboardHelper.SetSystemClipboardHistoryEnabled(!_settings.ReplaceSystemWinV);
             _settings.EnableShellNavigateInject = copy.EnableShellNavigateInject;
@@ -726,6 +728,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         AppSettings.FlushPendingSave();
+
+        if (_settings.ClearHistoryOnExit)
+            _popup?.ClearHistory();
 
         if (_settings.ReplaceSystemWinV)
             SystemClipboardHelper.SetSystemClipboardHistoryEnabled(true);

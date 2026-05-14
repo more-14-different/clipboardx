@@ -135,6 +135,8 @@ public partial class PopupWindow : Window
     /// 主面板吞掉 Alt KeyDown 后，系统往往仍报告 Alt 未按下；锁存到 Alt KeyUp，供 Alt+/、Alt+` 等与 VkToChar 防录入对齐。
     /// </summary>
     private bool _swallowedMenuAltLatch;
+    /// <summary>Win+V 被本程序拦截后，吞掉后续 Win KeyUp 以防止开始菜单弹出。</summary>
+    private bool _winVIntercepted;
     private readonly List<(Border Row, Action Activate)> _contextMenuNav = new();
     private int _contextNavIndex;
     /// <summary>当前标为「待二次 Del 删除」的条目，与 <see cref="ClipboardEntry.IsPendingDelete"/> 同步。</summary>
@@ -1770,6 +1772,8 @@ public partial class PopupWindow : Window
         SyncBatchPasteKeyboardHook();
         if (!fromClipboardMonitor)
             SchedulePushBatchQueueHeadIfChanged(headBefore, mode);
+        else if (mode == BatchPasteQueueMode.Fifo)
+            _ = TryPushClipboardQueueHeadAsync();
         if (_batchQueue.Count > 0)
             _batchQueueAwaitingNextPasteToSwitchOff = false;
 #endif
@@ -3555,6 +3559,12 @@ public partial class PopupWindow : Window
         if (hwnd == IntPtr.Zero || hwnd == _hwnd || !Win32.IsWindow(hwnd)) return;
         if (FileDialogJumpHelper.IsLikelyFileDialog(hwnd)) return;
 
+        // 跳过需要通过剪贴板通信的文件管理器（XYplorer、Total Commander），
+        // 避免每次前台切换都发送脚本导致 scripting console 异常和剪贴板被覆盖。
+        // 这些管理器的路径仅在文件对话框打开时按需采集（CollectCandidates）。
+        var rootCls = Win32.GetWindowClassName(Win32.GetAncestor(hwnd, Win32.GA_ROOT));
+        if (rootCls is "ThunderRT6FormDC" or "TTOTAL_CMD") return;
+
         var folder = FileManagerPathCollector.TryGetFolderForWindow(hwnd);
         if (string.IsNullOrWhiteSpace(folder)) return;
 
@@ -3590,7 +3600,11 @@ public partial class PopupWindow : Window
 
         var fgNow = Win32.GetForegroundWindow();
         var dialogHwnd = ResolveFileJumpTargetHwndInternal(fgNow);
-        if (dialogHwnd == IntPtr.Zero) return;
+        if (dialogHwnd == IntPtr.Zero)
+        {
+            OpenGlobalFavoritesPicker();
+            return;
+        }
 
         // 列表窗正在 new 的过程中尚未赋给 _activeFileJumpPicker：忽略重复热键，避免再次排队打开。
         if (_fileJumpPickerOpenInProgress && _activeFileJumpPicker == null)
@@ -3668,6 +3682,52 @@ public partial class PopupWindow : Window
         };
         th.SetApartmentState(ApartmentState.STA);
         th.Start();
+    }
+
+    /// <summary>全局 Ctrl+G：非文件对话框界面打开收藏/常用文件夹快速选择窗口。</summary>
+    private void OpenGlobalFavoritesPicker()
+    {
+        if (_appSettings == null) return;
+        if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress) return;
+
+        var candidates = new List<FileJumpCandidate>();
+
+        foreach (var fav in _appSettings.FolderFavorites)
+        {
+            if (string.IsNullOrWhiteSpace(fav.Path)) continue;
+            try
+            {
+                var full = Path.GetFullPath(fav.Path.Trim());
+                if (Directory.Exists(full))
+                    candidates.Add(new FileJumpCandidate("收藏", full));
+            }
+            catch { /* ignore */ }
+        }
+
+        foreach (var r in _appSettings.RecentFileDialogFolders)
+        {
+            if (string.IsNullOrWhiteSpace(r)) continue;
+            try
+            {
+                var full = Path.GetFullPath(r.Trim());
+                if (Directory.Exists(full) && !candidates.Any(c =>
+                    string.Equals(c.Path, full, StringComparison.OrdinalIgnoreCase)))
+                    candidates.Add(new FileJumpCandidate("常用", full));
+            }
+            catch { /* ignore */ }
+        }
+
+        Win32.GetCursorPos(out var pos);
+        var picker = new FileDialogJumpPickerWindow(
+            candidates, 0, pos.X, pos.Y, _appSettings, IntPtr.Zero,
+            autoForegroundStickyMode: false);
+        _activeFileJumpPicker = picker;
+        picker.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_activeFileJumpPicker, picker))
+                _activeFileJumpPicker = null;
+        };
+        picker.Show();
     }
 
     private void TryJumpFileDialogToLastFolderContinueAfterCollect(
@@ -4642,12 +4702,15 @@ public partial class PopupWindow : Window
         if (resolved != IntPtr.Zero)
             return resolved;
 
+        // 仅当前台就是上次对话框时才复用，避免后台残留对话框导致 Ctrl+G 误导航。
         if (_fileJumpLastDialogHwnd != IntPtr.Zero
+            && _fileJumpLastDialogHwnd == fgNow
             && Win32.IsWindow(_fileJumpLastDialogHwnd)
             && FileDialogJumpHelper.ClassifyFileDialog(_fileJumpLastDialogHwnd) != FileDialogKind.None)
             return _fileJumpLastDialogHwnd;
 
         if (_fileJumpLastDialogHwnd != IntPtr.Zero
+            && _fileJumpLastDialogHwnd == fgNow
             && Win32.IsWindow(_fileJumpLastDialogHwnd)
             && CustomFileDialogStore.FindMatchingRule(_fileJumpLastDialogHwnd) != null)
             return _fileJumpLastDialogHwnd;
