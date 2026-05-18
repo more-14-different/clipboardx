@@ -208,10 +208,24 @@ dotnet run
 
 Debug 带控制台；正式发布用 **Release**。工程文件 **`ClipboardManager.csproj`**，输出名 **ClipboardX**，根命名空间仍为 **ClipboardManager**。
 
+### macOS（第一版 · 仅剪贴板）
+
+仓库内 **`ClipboardX.Mac`**（Avalonia 11）+ **`ClipboardX.Core`**（与 Windows 版 **同一 SQLite 表结构** 的历史存储与拼音检索）。在 Mac 上于仓库根目录执行：
+
+```bash
+dotnet run --project ClipboardX.Mac/ClipboardX.Mac.csproj
+```
+
+配置与数据库默认在 **`~/Library/Application Support/ClipboardX/`**（`mac-settings.json`、`clipboard_history.db`）。全局热键 **Ctrl+`（反引号）** 使用 **SharpHook**，一般需在 **系统设置 → 隐私与安全性 → 辅助功能** 中为终端或发布产物授权；亦可从托盘菜单打开面板。
+
+发布示例：`dotnet publish ClipboardX.Mac/ClipboardX.Mac.csproj -c Release -r osx-arm64 --self-contained`（Intel 用 `osx-x64`）。当前不包含 Windows 上的文件对话框跳转等能力。
+
 ### 源码目录（简要）
 
 | 目录 | 内容 |
 |------|------|
+| `ClipboardX.Core/` | 跨平台共享：剪贴板历史 SQLite、`HistoryEntry`、拼音检索（供 Mac 等宿主使用） |
+| `ClipboardX.Mac/` | macOS / Avalonia 剪贴板第一版（轮询剪贴板、列表、托盘、Ctrl+`） |
 | `Views/` | 主弹窗、设置、跳转选择器、`SharedPopupStyles.xaml` |
 | `Models/` | `AppSettings`、自定义对话框规则、剪贴板项、收藏等 |
 | `Services/` | 主题、更新、剪贴板门禁、自定义规则存储、自启动、`AppInfo` |
