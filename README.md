@@ -324,6 +324,10 @@ dotnet publish ClipboardManager.csproj -c Release -r win-x64 \
 
 结构化列表见 **[CHANGELOG.md](CHANGELOG.md)**（推送 `v*` 标签后，GitHub Release 会从中截取当前版本的 **更新内容**）。以下为 README 内便于浏览的摘录；安装包见 **[Releases](https://github.com/chaojimct/clipboardx/releases)**。
 
+### v1.7.1
+
+- **设置页布局修复**：「退出时自动清空历史」行不再被挤压为 10px 高度
+
 ### v1.7.0
 
 - **退出自动清空历史记录**：设置 → 剪贴板 →「退出时自动清空历史」（默认关闭）
