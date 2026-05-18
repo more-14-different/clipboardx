@@ -53,6 +53,8 @@
   <ItemGroup>
     <Compile Remove="tools\**\*" />
     <Compile Remove="ClipboardX\**\*" />
+    <Compile Remove="ClipboardX.Core\**\*" />
+    <Compile Remove="ClipboardX.Mac\**\*" />
     <Compile Remove="artifacts\**\*" />
   </ItemGroup>
 

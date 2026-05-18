@@ -1,0 +1,50 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:core="using:ClipboardX.Core"
+        x:Class="ClipboardX.Mac.Views.MainWindow"
+        Width="440"
+        Height="520"
+        Title="ClipboardX">
+    <DockPanel Margin="12" LastChildFill="True">
+        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
+            <TextBox Name="SearchBox"
+                     Watermark="筛选（支持拼音）"
+                     AcceptsReturn="False"
+                     TextWrapping="NoWrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Name="PasteButton" Content="粘贴到前台应用 (Enter)" Padding="12,6"/>
+                <Button Name="RemoveButton" Content="删除项" Padding="12,6"/>
+                <Button Name="ClearButton" Content="清空历史" Padding="12,6"/>
+            </StackPanel>
+            <TextBlock Name="HintBar"
+                       Text="快捷键 Ctrl+` 显示/隐藏；粘贴后发 Cmd+V 到前台。双击条目粘贴。"
+                       TextWrapping="Wrap"
+                       Opacity="0.75"
+                       FontSize="11"/>
+        </StackPanel>
+        <Border DockPanel.Dock="Bottom" Margin="0,8,0,0" Padding="8"
+                Background="#333337">
+            <TextBlock Name="StatusBar" FontSize="11"/>
+        </Border>
+        <ListBox Name="HistoryList"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="core:HistoryEntry">
+                    <Grid ColumnDefinitions="Auto,*" Margin="0,4">
+                        <TextBlock Grid.Column="0" Margin="0,0,10,0" VerticalAlignment="Top"
+                                   FontSize="14"
+                                   Text="{Binding TypeEmoji}"/>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="{Binding PreviewLine}"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding TimeAgoDisplay}"
+                                       FontSize="11"
+                                       Opacity="0.65"/>
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</Window>
