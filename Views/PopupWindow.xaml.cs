@@ -2121,11 +2121,13 @@ public partial class PopupWindow : Window
                 Win32.TryEmptyClipboardAfterOpen(_hwnd);
 
             _isSettingClipboard = true;
-            var clipboardResult = await TrySetTextViaPreferredClipboardPathAsync(
+            var textClipboard = await TrySetTextViaPreferredClipboardPathAsync(
                 combined,
                 "paste batchText",
                 maxRetries: 10,
                 delayMs: 45);
+            await using var providerSession = textClipboard.ProviderSession;
+            var clipboardResult = textClipboard.Result;
             var ok = clipboardResult.Success;
             var usedNonClipboardBatchInsert = false;
             bool insertedMerged = false;
@@ -2151,7 +2153,11 @@ public partial class PopupWindow : Window
             if (ok)
             {
                 if (!usedNonClipboardBatchInsert)
+                {
                     SendPasteToTarget();
+                    if (providerSession != null)
+                        await Task.Delay(180);
+                }
             }
 
             // 已插入合并条目时不再对原条目重排：用户期望「仅合并字符串顶上去，原条目不动」。
@@ -5398,7 +5404,7 @@ public partial class PopupWindow : Window
         return result.Success;
     }
 
-    private async Task<ClipboardSetResult> TrySetTextViaPreferredClipboardPathAsync(
+    private async Task<(ClipboardSetResult Result, AltVClipboardProvider.Session? ProviderSession)> TrySetTextViaPreferredClipboardPathAsync(
         string text,
         string logTag,
         int maxRetries,
@@ -5406,11 +5412,12 @@ public partial class PopupWindow : Window
     {
         if (EnableExternalClipboardProviderForAltV)
         {
-            var providerResult = await AltVClipboardProvider.TrySetTextFromSeparateProcessAsync(text);
+            var providerSession = await AltVClipboardProvider.StartTextSessionAsync(text);
+            var providerResult = providerSession.Result;
             ClipboardDiagnosticsLog.Write(
                 $"{logTag} clipboardProvider ok={providerResult.Success} locked={providerResult.ClipboardLocked} len={text.Length}" +
                 (string.IsNullOrWhiteSpace(providerResult.Error) ? "" : $" err=\"{providerResult.Error}\""));
-            return new ClipboardSetResult(providerResult.Success, providerResult.ClipboardLocked);
+            return (new ClipboardSetResult(providerResult.Success, providerResult.ClipboardLocked), providerSession);
         }
 
         var directResult = await TrySetClipboardDetailedAsync(
@@ -5421,7 +5428,7 @@ public partial class PopupWindow : Window
             clipNudgeHwnd: _hwnd);
         ClipboardDiagnosticsLog.Write(
             $"{logTag} clipboardPrimary ok={directResult.Success} locked={directResult.ClipboardLocked} len={text.Length}");
-        return directResult;
+        return (directResult, null);
     }
 
     private bool TryInsertTextWithoutClipboard(string text, string logTag, out bool usedNonClipboardTextInsert)
@@ -5484,6 +5491,10 @@ public partial class PopupWindow : Window
         _pasteInProgress = true;
         // 单次粘贴成功后会改为 true，让 finally 跳过同步清标志，由后台定时器在回波窗口结束后清。
         bool deferPasteFlagToTimer = false;
+        bool clipboardOk = false;
+        bool usedNonClipboardTextInsert = false;
+        AltVClipboardProvider.Session? providerSession = null;
+        bool noSegmentDelays = sequentialSegmentIndex >= 0;
         try
         {
         ClearPendingDelete();
@@ -5517,7 +5528,6 @@ public partial class PopupWindow : Window
         var imgBytes = item.ImageData?.Length ?? 0;
         var imgPixels = item.Type == EntryType.Image ? item.ImageWidth * item.ImageHeight : 0;
         var hugeClipboardImage = item.Type == EntryType.Image && (imgBytes > 900_000 || imgPixels > 1_200_000);
-        var noSegmentDelays = sequentialSegmentIndex >= 0;
         if (!noSegmentDelays)
         {
             // 焦点切回后等待目标进程消息泵处理一轮；以前的较大值是为兼容个别拖慢的 OLE 富文本场景，
@@ -5548,8 +5558,6 @@ public partial class PopupWindow : Window
         }
 
         _isSettingClipboard = true;
-        bool clipboardOk = false;
-        bool usedNonClipboardTextInsert = false;
         var clipRetries = noSegmentDelays ? 8 : 2;
         var clipRetryDelayMs = noSegmentDelays ? 60 : 40;
         try
@@ -5561,11 +5569,13 @@ public partial class PopupWindow : Window
                     var clipText = sendNewlineAfterTextWhenCtrlEnterBatch && noSegmentDelays
                         ? item.TextContent! + Environment.NewLine
                         : item.TextContent!;
-                    var clipboardResult = await TrySetTextViaPreferredClipboardPathAsync(
+                    var textClipboard = await TrySetTextViaPreferredClipboardPathAsync(
                         clipText,
                         "paste text",
                         maxRetries: noSegmentDelays ? Math.Min(clipRetries, 3) : 1,
                         delayMs: clipRetryDelayMs);
+                    providerSession = textClipboard.ProviderSession;
+                    var clipboardResult = textClipboard.Result;
                     clipboardOk = clipboardResult.Success;
                     if (clipboardOk)
                     {
@@ -5699,6 +5709,12 @@ public partial class PopupWindow : Window
         }
         finally
         {
+            if (providerSession != null)
+            {
+                if (clipboardOk && !usedNonClipboardTextInsert)
+                    await Task.Delay(noSegmentDelays ? 80 : 180);
+                await providerSession.DisposeAsync();
+            }
             if (!_sequentialPasteHold && !deferPasteFlagToTimer)
                 _pasteInProgress = false;
         }

@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Threading;
+using WinForms = System.Windows.Forms;
 
 namespace ClipboardManager;
 
@@ -10,10 +12,64 @@ internal static class AltVClipboardProvider
     private const string ModeArg = "--altv-provider-settext";
     private const string RequestArg = "--request-file";
     private const string ResultArg = "--result-file";
+    private const string StopArg = "--stop-file";
     private const int ProviderRetries = 18;
     private const int ProviderDelayMs = 75;
+    private const int ProviderHoldTimeoutMs = 8_000;
+    private const int ProviderResultTimeoutMs = 5_000;
 
     internal readonly record struct Result(bool Success, bool ClipboardLocked, string Error);
+
+    internal sealed class Session : IAsyncDisposable
+    {
+        private readonly Process? _process;
+        private readonly string _requestFile;
+        private readonly string _resultFile;
+        private readonly string _stopFile;
+        private bool _disposed;
+
+        public Session(Result result, Process? process, string requestFile, string resultFile, string stopFile)
+        {
+            Result = result;
+            _process = process;
+            _requestFile = requestFile;
+            _resultFile = resultFile;
+            _stopFile = stopFile;
+        }
+
+        public Result Result { get; }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            try
+            {
+                if (_process is { HasExited: false })
+                {
+                    TryTouch(_stopFile);
+                    using var cts = new CancellationTokenSource(1500);
+                    try
+                    {
+                        await _process.WaitForExitAsync(cts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        try { _process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                    }
+                }
+            }
+            finally
+            {
+                _process?.Dispose();
+                TryDelete(_requestFile);
+                TryDelete(_resultFile);
+                TryDelete(_stopFile);
+            }
+        }
+    }
 
     private sealed class Payload
     {
@@ -30,7 +86,8 @@ internal static class AltVClipboardProvider
 
         var requestFile = GetArgValue(args, RequestArg);
         var resultFile = GetArgValue(args, ResultArg);
-        if (string.IsNullOrWhiteSpace(requestFile) || string.IsNullOrWhiteSpace(resultFile))
+        var stopFile = GetArgValue(args, StopArg);
+        if (string.IsNullOrWhiteSpace(requestFile) || string.IsNullOrWhiteSpace(resultFile) || string.IsNullOrWhiteSpace(stopFile))
         {
             exitCode = 2;
             return true;
@@ -41,6 +98,12 @@ internal static class AltVClipboardProvider
             var text = File.ReadAllText(requestFile, new UTF8Encoding(false));
             var result = TrySetClipboardText(text);
             WriteResult(resultFile, result);
+            if (result.Success)
+            {
+                ClipboardDiagnosticsLog.Write($"provider hold begin len={text.Length} stop=\"{stopFile}\"");
+                HoldClipboardProviderSession(stopFile, ProviderHoldTimeoutMs);
+                ClipboardDiagnosticsLog.Write($"provider hold end len={text.Length}");
+            }
             exitCode = result.Success ? 0 : 1;
             return true;
         }
@@ -52,7 +115,7 @@ internal static class AltVClipboardProvider
         }
     }
 
-    public static async Task<Result> TrySetTextFromSeparateProcessAsync(string text)
+    public static async Task<Session> StartTextSessionAsync(string text)
     {
         var dir = Path.Combine(Path.GetTempPath(), "ClipboardX", "altv-provider");
         Directory.CreateDirectory(dir);
@@ -60,46 +123,60 @@ internal static class AltVClipboardProvider
         var token = Guid.NewGuid().ToString("N");
         var requestFile = Path.Combine(dir, $"request-{token}.txt");
         var resultFile = Path.Combine(dir, $"result-{token}.json");
+        var stopFile = Path.Combine(dir, $"stop-{token}.signal");
         await File.WriteAllTextAsync(requestFile, text, new UTF8Encoding(false));
 
-        try
-        {
-            var exePath = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
-                return new Result(false, false, "ProcessPath unavailable");
+        var exePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+            return new Session(new Result(false, false, "ProcessPath unavailable"), null, requestFile, resultFile, stopFile);
 
-            var psi = new ProcessStartInfo(exePath)
+        var psi = new ProcessStartInfo(exePath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        psi.ArgumentList.Add(ModeArg);
+        psi.ArgumentList.Add(RequestArg);
+        psi.ArgumentList.Add(requestFile);
+        psi.ArgumentList.Add(ResultArg);
+        psi.ArgumentList.Add(resultFile);
+        psi.ArgumentList.Add(StopArg);
+        psi.ArgumentList.Add(stopFile);
+
+        var process = Process.Start(psi);
+        if (process == null)
+            return new Session(new Result(false, false, "Process.Start returned null"), null, requestFile, resultFile, stopFile);
+
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < ProviderResultTimeoutMs)
+        {
+            if (File.Exists(resultFile))
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
-            psi.ArgumentList.Add(ModeArg);
-            psi.ArgumentList.Add(RequestArg);
-            psi.ArgumentList.Add(requestFile);
-            psi.ArgumentList.Add(ResultArg);
-            psi.ArgumentList.Add(resultFile);
+                var payload = JsonSerializer.Deserialize<Payload>(await File.ReadAllTextAsync(resultFile, Encoding.UTF8));
+                if (payload == null)
+                    return new Session(new Result(false, false, "Provider result parse failed"), process, requestFile, resultFile, stopFile);
 
-            using var process = Process.Start(psi);
-            if (process == null)
-                return new Result(false, false, "Process.Start returned null");
+                return new Session(
+                    new Result(payload.Success, payload.ClipboardLocked, payload.Error ?? ""),
+                    process,
+                    requestFile,
+                    resultFile,
+                    stopFile);
+            }
 
-            await process.WaitForExitAsync();
+            if (process.HasExited)
+                break;
 
-            if (!File.Exists(resultFile))
-                return new Result(false, false, $"Result file missing (exit={process.ExitCode})");
-
-            var payload = JsonSerializer.Deserialize<Payload>(await File.ReadAllTextAsync(resultFile, Encoding.UTF8));
-            if (payload == null)
-                return new Result(false, false, "Provider result parse failed");
-
-            return new Result(payload.Success, payload.ClipboardLocked, payload.Error ?? "");
+            await Task.Delay(25);
         }
-        finally
-        {
-            TryDelete(requestFile);
-            TryDelete(resultFile);
-        }
+
+        return new Session(
+            new Result(false, false, process.HasExited ? $"Provider exited ({process.ExitCode}) without result" : "Provider result timeout"),
+            process,
+            requestFile,
+            resultFile,
+            stopFile);
     }
 
     private static Result TrySetClipboardText(string text)
@@ -110,8 +187,10 @@ internal static class AltVClipboardProvider
             try
             {
                 Win32.CloseClipboard();
-                System.Windows.Clipboard.SetText(text);
-                ClipboardDiagnosticsLog.Write($"provider SetText ok len={text.Length} attempt={i + 1}/{ProviderRetries}");
+                var dataObject = new WinForms.DataObject();
+                dataObject.SetData(WinForms.DataFormats.UnicodeText, true, text);
+                WinForms.Clipboard.SetDataObject(dataObject, true, 1, ProviderDelayMs);
+                ClipboardDiagnosticsLog.Write($"provider SetDataObject ok len={text.Length} attempt={i + 1}/{ProviderRetries}");
                 return new Result(true, false, "");
             }
             catch (Exception ex)
@@ -122,18 +201,41 @@ internal static class AltVClipboardProvider
                     ? $" hr=0x{(uint)com.HResult:X8}"
                     : "";
                 ClipboardDiagnosticsLog.Write(
-                    $"provider SetText fail attempt={i + 1}/{ProviderRetries} {ex.GetType().Name}: {ex.Message}{hr}");
+                    $"provider SetDataObject fail attempt={i + 1}/{ProviderRetries} {ex.GetType().Name}: {ex.Message}{hr}");
                 if (locked)
                     ClipboardDiagnosticsLog.Write($"provider owner {DescribeOpenClipboardOwner()}");
 
                 if (i >= ProviderRetries - 1)
                     break;
 
+                PumpOnce();
                 Thread.Sleep(ProviderDelayMs);
             }
         }
 
         return new Result(false, last is not null && IsClipboardCantOpen(last), last?.Message ?? "Unknown provider failure");
+    }
+
+    private static void HoldClipboardProviderSession(string stopFile, int timeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (File.Exists(stopFile))
+                return;
+
+            PumpOnce();
+            Thread.Sleep(15);
+        }
+    }
+
+    private static void PumpOnce()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() => frame.Continue = false));
+        Dispatcher.PushFrame(frame);
     }
 
     private static string? GetArgValue(IReadOnlyList<string> args, string name)
@@ -186,6 +288,18 @@ internal static class AltVClipboardProvider
         };
         var json = JsonSerializer.Serialize(payload);
         File.WriteAllText(path, json, new UTF8Encoding(false));
+    }
+
+    private static void TryTouch(string path)
+    {
+        try
+        {
+            File.WriteAllText(path, "stop", new UTF8Encoding(false));
+        }
+        catch
+        {
+            /* ignore */
+        }
     }
 
     private static void TryDelete(string path)
