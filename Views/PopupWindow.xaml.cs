@@ -27,6 +27,8 @@ public partial class PopupWindow : Window
 {
     private const int HotkeyId = 9001;
     private const int HotkeyJumpLastFolderId = 9002;
+    private static readonly bool EnableTextClipboardPrimaryForAltV = false;
+    private static readonly bool EnableUiAutomationTextReplaceFallback = true;
 
     private readonly List<ClipboardEntry> _allItems = new();
     private readonly ObservableCollection<ClipboardEntry> _displayItems = new();
@@ -2112,8 +2114,6 @@ public partial class PopupWindow : Window
 
             if (hidePopupAfter)
                 HidePopup();
-            if (_targetWindow != IntPtr.Zero)
-                Win32.SetForegroundWindowAggressive(_targetWindow);
 
             // 让出一帧给前台切换，比固定 26ms 更短且更稳定。
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
@@ -2122,22 +2122,39 @@ public partial class PopupWindow : Window
                 Win32.TryEmptyClipboardAfterOpen(_hwnd);
 
             _isSettingClipboard = true;
-            var ok = await TrySetClipboardAsync(
-                () => System.Windows.Clipboard.SetText(combined),
-                $"SetText batchCombined len={combined.Length}",
-                maxRetries: 10,
-                delayMs: 45,
-                clipNudgeHwnd: _hwnd);
+            var ok = false;
+            var usedNonClipboardBatchInsert = false;
             bool insertedMerged = false;
-            if (ok)
+            if (EnableTextClipboardPrimaryForAltV)
             {
-                MarkSelfWroteClipboard();
-                // 合并产物入库：与系统剪贴板状态对齐，便于用户后续复用整段。回波拦截（旗 + 序列号）确保 OnClipboardUpdate 不会重复入库。
-                if (ordered.Count >= 2)
+                var clipboardResult = await TrySetClipboardDetailedAsync(
+                    () => System.Windows.Clipboard.SetText(combined),
+                    $"SetText batchCombined len={combined.Length}",
+                    maxRetries: 10,
+                    delayMs: 45,
+                    clipNudgeHwnd: _hwnd);
+                ok = clipboardResult.Success;
+                ClipboardDiagnosticsLog.Write(
+                    $"paste batchText clipboardPrimary ok={ok} locked={clipboardResult.ClipboardLocked} len={combined.Length}");
+                if (ok)
                 {
-                    InsertBatchMergedEntry(new ClipboardEntry { Type = EntryType.Text, TextContent = combined });
-                    insertedMerged = true;
+                    MarkSelfWroteClipboard();
+                    // 合并产物入库：与系统剪贴板状态对齐，便于用户后续复用整段。回波拦截（旗 + 序列号）确保 OnClipboardUpdate 不会重复入库。
+                    if (ordered.Count >= 2)
+                    {
+                        InsertBatchMergedEntry(new ClipboardEntry { Type = EntryType.Text, TextContent = combined });
+                        insertedMerged = true;
+                    }
                 }
+                else if (clipboardResult.ClipboardLocked)
+                {
+                    ok = TryInsertTextWithoutClipboard(combined, "paste batchText", out usedNonClipboardBatchInsert);
+                }
+            }
+            else
+            {
+                ClipboardDiagnosticsLog.Write($"paste batchText clipboardPrimary skipped len={combined.Length}");
+                ok = TryInsertTextWithoutClipboard(combined, "paste batchText", out usedNonClipboardBatchInsert);
             }
             // 不立刻清 _isSettingClipboard：必须等本次 SetText 触发的 WM_CLIPBOARDUPDATE 派发完，
             // 否则该消息到达时旗已落，OnClipboardUpdate 会把合并文本当成「用户复制」入库。
@@ -2146,7 +2163,8 @@ public partial class PopupWindow : Window
 
             if (ok)
             {
-                SendPasteToTarget();
+                if (!usedNonClipboardBatchInsert)
+                    SendPasteToTarget();
             }
 
             // 已插入合并条目时不再对原条目重排：用户期望「仅合并字符串顶上去，原条目不动」。
@@ -5324,10 +5342,12 @@ public partial class PopupWindow : Window
         catch { /* ignore */ }
     }
 
+    private readonly record struct ClipboardSetResult(bool Success, bool ClipboardLocked);
+
     /// <summary>
     /// 使用 await Task.Delay 重试，避免 Thread.Sleep 卡死 UI；仅少量短重试，失败快速返回。
     /// </summary>
-    private static async Task<bool> TrySetClipboardAsync(
+    private static async Task<ClipboardSetResult> TrySetClipboardDetailedAsync(
         Action setAction,
         string logOp,
         int maxRetries = 2,
@@ -5341,7 +5361,7 @@ public partial class PopupWindow : Window
             if (canContinueBeforeEachAttempt != null && !canContinueBeforeEachAttempt())
             {
                 ClipboardDiagnosticsLog.Write($"TrySetClipboard aborted coherence op={logOp} attempt={i + 1}");
-                return false;
+                return new ClipboardSetResult(false, false);
             }
             try
             {
@@ -5349,7 +5369,7 @@ public partial class PopupWindow : Window
                 setAction();
                 if (i > 0)
                     ClipboardDiagnosticsLog.Write($"TrySetClipboard OK after retry i={i} op={logOp}");
-                return true;
+                return new ClipboardSetResult(true, false);
             }
             catch (Exception ex)
             {
@@ -5362,7 +5382,7 @@ public partial class PopupWindow : Window
                 if (canContinueBeforeEachAttempt != null && !canContinueBeforeEachAttempt())
                 {
                     ClipboardDiagnosticsLog.Write($"TrySetClipboard aborted coherence before retry delay op={logOp}");
-                    return false;
+                    return new ClipboardSetResult(false, IsClipboardCantOpen(ex));
                 }
                 if (IsClipboardCantOpen(ex) && clipNudgeHwnd != IntPtr.Zero && Win32.TryEmptyClipboardAfterOpen(clipNudgeHwnd))
                     ClipboardDiagnosticsLog.Write($"TrySetClipboard reNudge op={logOp} afterAttempt={i + 1}");
@@ -5370,7 +5390,44 @@ public partial class PopupWindow : Window
             }
         }
         ClipboardDiagnosticsLog.Write($"TrySetClipboard GAVE_UP op={logOp} last={last?.GetType().Name}: {last?.Message}");
-        return false;
+        return new ClipboardSetResult(false, last is not null && IsClipboardCantOpen(last));
+    }
+
+    private static async Task<bool> TrySetClipboardAsync(
+        Action setAction,
+        string logOp,
+        int maxRetries = 2,
+        int delayMs = 40,
+        IntPtr clipNudgeHwnd = default,
+        Func<bool>? canContinueBeforeEachAttempt = null)
+    {
+        var result = await TrySetClipboardDetailedAsync(
+            setAction,
+            logOp,
+            maxRetries,
+            delayMs,
+            clipNudgeHwnd,
+            canContinueBeforeEachAttempt);
+        return result.Success;
+    }
+
+    private bool TryInsertTextWithoutClipboard(string text, string logTag, out bool usedNonClipboardTextInsert)
+    {
+        usedNonClipboardTextInsert = false;
+
+        var ok = TryDirectTypeTextToTarget(text);
+        usedNonClipboardTextInsert = ok;
+        ClipboardDiagnosticsLog.Write($"{logTag} directUnicode ok={ok} len={text.Length}");
+        if (ok)
+            return true;
+
+        if (!EnableUiAutomationTextReplaceFallback)
+            return false;
+
+        ok = TryReplaceFocusedTextViaUiAutomation(_targetWindow, text);
+        usedNonClipboardTextInsert = ok;
+        ClipboardDiagnosticsLog.Write($"{logTag} uiaReplace ok={ok} len={text.Length}");
+        return ok;
     }
 
     private static string DescribeOpenClipboardOwner(IntPtr selfHwnd)
@@ -5443,11 +5500,9 @@ public partial class PopupWindow : Window
             _ => $"paste BEGIN type={item.Type} target=0x{tgt:X}"
         });
 
-        // 在仍是弹窗前台时 OpenClipboard，常与目标进程（大段文本/富文本 OLE）争用 → 连续 CLIPBRD_E_CANT_OPEN。先 Hide + 强力切回目标并等待剪贴板释放。
+        // Alt+V 面板本身是 no-activate；先 Hide 再写剪贴板，尽量保持原输入上下文不变。
         if (hidePopupAfter)
             HidePopup();
-        if (_targetWindow != IntPtr.Zero)
-            Win32.SetForegroundWindowAggressive(_targetWindow);
         var textLen = item.TextContent?.Length ?? 0;
         var imgBytes = item.ImageData?.Length ?? 0;
         var imgPixels = item.Type == EntryType.Image ? item.ImageWidth * item.ImageHeight : 0;
@@ -5467,7 +5522,7 @@ public partial class PopupWindow : Window
             };
             if (focusSettleMs > 0)
                 await Task.Delay(focusSettleMs);
-            ClipboardDiagnosticsLog.Write($"paste focusSettleMs={focusSettleMs} after Hide+SetForegroundAggressive");
+            ClipboardDiagnosticsLog.Write($"paste focusSettleMs={focusSettleMs} after HidePopup");
         }
         else
         {
@@ -5496,34 +5551,24 @@ public partial class PopupWindow : Window
                     var clipText = sendNewlineAfterTextWhenCtrlEnterBatch && noSegmentDelays
                         ? item.TextContent! + Environment.NewLine
                         : item.TextContent!;
-                    // Prefer non-clipboard insertion paths:
-                    // 1) Edit/RichEdit direct replace (paste-like semantics, no key typing)
-                    // 2) Unicode input injection
-                    // 3) Clipboard write as last resort
-                    clipboardOk = TryDirectInsertTextToFocusedEditControl(_targetWindow, clipText);
-                    ClipboardDiagnosticsLog.Write($"paste text directInsert ok={clipboardOk} len={clipText.Length}");
-                    if (!clipboardOk)
+                    if (EnableTextClipboardPrimaryForAltV)
                     {
-                        clipboardOk = TryReplaceFocusedTextViaUiAutomation(_targetWindow, clipText);
-                        usedNonClipboardTextInsert = clipboardOk;
-                        ClipboardDiagnosticsLog.Write($"paste text uiaReplace ok={clipboardOk} len={clipText.Length}");
+                        var clipboardResult = await TrySetClipboardDetailedAsync(
+                            () => System.Windows.Clipboard.SetText(clipText),
+                            $"SetText len={clipText.Length}",
+                            maxRetries: noSegmentDelays ? Math.Min(clipRetries, 3) : 1,
+                            delayMs: clipRetryDelayMs,
+                            clipNudgeHwnd: _hwnd);
+                        clipboardOk = clipboardResult.Success;
+                        ClipboardDiagnosticsLog.Write(
+                            $"paste text clipboardPrimary ok={clipboardOk} locked={clipboardResult.ClipboardLocked} len={clipText.Length}");
+                        if (!clipboardOk && clipboardResult.ClipboardLocked)
+                            clipboardOk = TryInsertTextWithoutClipboard(clipText, "paste text", out usedNonClipboardTextInsert);
                     }
-                    if (!clipboardOk)
+                    else
                     {
-                        clipboardOk = TryDirectTypeTextToTarget(clipText);
-                        usedNonClipboardTextInsert = clipboardOk;
-                        ClipboardDiagnosticsLog.Write($"paste text directUnicode ok={clipboardOk} len={clipText.Length}");
-                        if (!clipboardOk)
-                        {
-                            clipboardOk = await TrySetClipboardAsync(
-                                () => System.Windows.Clipboard.SetText(clipText),
-                                $"SetText len={clipText.Length}",
-                                maxRetries: noSegmentDelays ? Math.Min(clipRetries, 3) : 1,
-                                delayMs: clipRetryDelayMs,
-                                clipNudgeHwnd: _hwnd);
-                            if (clipboardOk)
-                                ClipboardDiagnosticsLog.Write($"paste text clipboardFallback ok=True len={clipText.Length}");
-                        }
+                        ClipboardDiagnosticsLog.Write($"paste text clipboardPrimary skipped len={clipText.Length}");
+                        clipboardOk = TryInsertTextWithoutClipboard(clipText, "paste text", out usedNonClipboardTextInsert);
                     }
                     break;
                 }
