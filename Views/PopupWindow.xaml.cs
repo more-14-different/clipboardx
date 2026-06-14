@@ -5356,6 +5356,8 @@ public partial class PopupWindow : Window
                 last = ex;
                 var hr = ex is COMException com ? $" hr=0x{(uint)com.HResult:X8}" : "";
                 ClipboardDiagnosticsLog.Write($"TrySetClipboard fail attempt={i + 1}/{maxRetries} op={logOp} {ex.GetType().Name}: {ex.Message}{hr}");
+                if (IsClipboardCantOpen(ex))
+                    ClipboardDiagnosticsLog.Write($"TrySetClipboard owner {DescribeOpenClipboardOwner(clipNudgeHwnd)}");
                 if (i >= maxRetries - 1) break;
                 if (canContinueBeforeEachAttempt != null && !canContinueBeforeEachAttempt())
                 {
@@ -5369,6 +5371,33 @@ public partial class PopupWindow : Window
         }
         ClipboardDiagnosticsLog.Write($"TrySetClipboard GAVE_UP op={logOp} last={last?.GetType().Name}: {last?.Message}");
         return false;
+    }
+
+    private static string DescribeOpenClipboardOwner(IntPtr selfHwnd)
+    {
+        var owner = Win32.GetOpenClipboardWindow();
+        if (owner == IntPtr.Zero)
+            return "owner=NONE";
+
+        var title = Win32.GetWindowText(owner);
+        var cls = Win32.GetWindowClassName(owner);
+        _ = Win32.GetWindowThreadProcessId(owner, out var pid);
+        var procName = "";
+        if (pid != 0)
+        {
+            try
+            {
+                using var p = Process.GetProcessById((int)pid);
+                procName = p.ProcessName;
+            }
+            catch
+            {
+                procName = "?";
+            }
+        }
+
+        var selfTag = owner == selfHwnd ? " self=True" : "";
+        return $"owner=0x{owner.ToInt64():X} pid={pid} proc={procName} class={cls} title=\"{title}\"{selfTag}";
     }
 
     private async void PasteSelectedItem()
@@ -5447,7 +5476,7 @@ public partial class PopupWindow : Window
             ClipboardDiagnosticsLog.Write($"paste sequential segment {sequentialSegmentIndex} (no focus settle delay)");
         }
 
-        if (_hwnd != IntPtr.Zero)
+        if (_hwnd != IntPtr.Zero && item.Type != EntryType.Text)
         {
             var nudged = Win32.TryEmptyClipboardAfterOpen(_hwnd);
             ClipboardDiagnosticsLog.Write($"paste clipNudge EmptyClipboard ok={nudged}");
@@ -5455,6 +5484,7 @@ public partial class PopupWindow : Window
 
         _isSettingClipboard = true;
         bool clipboardOk = false;
+        bool usedNonClipboardTextInsert = false;
         var clipRetries = noSegmentDelays ? 8 : 2;
         var clipRetryDelayMs = noSegmentDelays ? 60 : 40;
         try
@@ -5466,12 +5496,35 @@ public partial class PopupWindow : Window
                     var clipText = sendNewlineAfterTextWhenCtrlEnterBatch && noSegmentDelays
                         ? item.TextContent! + Environment.NewLine
                         : item.TextContent!;
-                    clipboardOk = await TrySetClipboardAsync(
-                        () => System.Windows.Clipboard.SetText(clipText),
-                        $"SetText len={clipText.Length}",
-                        maxRetries: clipRetries,
-                        delayMs: clipRetryDelayMs,
-                        clipNudgeHwnd: _hwnd);
+                    // Prefer non-clipboard insertion paths:
+                    // 1) Edit/RichEdit direct replace (paste-like semantics, no key typing)
+                    // 2) Unicode input injection
+                    // 3) Clipboard write as last resort
+                    clipboardOk = TryDirectInsertTextToFocusedEditControl(_targetWindow, clipText);
+                    ClipboardDiagnosticsLog.Write($"paste text directInsert ok={clipboardOk} len={clipText.Length}");
+                    if (!clipboardOk)
+                    {
+                        clipboardOk = TryReplaceFocusedTextViaUiAutomation(_targetWindow, clipText);
+                        usedNonClipboardTextInsert = clipboardOk;
+                        ClipboardDiagnosticsLog.Write($"paste text uiaReplace ok={clipboardOk} len={clipText.Length}");
+                    }
+                    if (!clipboardOk)
+                    {
+                        clipboardOk = TryDirectTypeTextToTarget(clipText);
+                        usedNonClipboardTextInsert = clipboardOk;
+                        ClipboardDiagnosticsLog.Write($"paste text directUnicode ok={clipboardOk} len={clipText.Length}");
+                        if (!clipboardOk)
+                        {
+                            clipboardOk = await TrySetClipboardAsync(
+                                () => System.Windows.Clipboard.SetText(clipText),
+                                $"SetText len={clipText.Length}",
+                                maxRetries: noSegmentDelays ? Math.Min(clipRetries, 3) : 1,
+                                delayMs: clipRetryDelayMs,
+                                clipNudgeHwnd: _hwnd);
+                            if (clipboardOk)
+                                ClipboardDiagnosticsLog.Write($"paste text clipboardFallback ok=True len={clipText.Length}");
+                        }
+                    }
                     break;
                 }
                 case EntryType.Image:
@@ -5546,9 +5599,12 @@ public partial class PopupWindow : Window
             ClipboardDiagnosticsLog.Write($"paste unexpected before/during set {ex.GetType().Name}: {ex.Message}");
         }
 
-        ClipboardDiagnosticsLog.Write($"paste END clipboardOk={clipboardOk} willSendPaste={clipboardOk}");
+        ClipboardDiagnosticsLog.Write(
+            $"paste END clipboardOk={clipboardOk} directText={usedNonClipboardTextInsert} willSendPaste={clipboardOk && !usedNonClipboardTextInsert}");
 
         if (!clipboardOk)
+            _isSettingClipboard = false;
+        else if (usedNonClipboardTextInsert)
             _isSettingClipboard = false;
         else if (noSegmentDelays)
         {
@@ -5559,7 +5615,7 @@ public partial class PopupWindow : Window
         else
             _ = Dispatcher.BeginInvoke(DispatcherPriority.SystemIdle, () => _isSettingClipboard = false);
 
-        if (clipboardOk)
+        if (clipboardOk && !usedNonClipboardTextInsert)
         {
             if (!noSegmentDelays)
             {
@@ -5585,6 +5641,10 @@ public partial class PopupWindow : Window
                     ClipboardDiagnosticsLog.Write($"paste post-echo suppression window elapsed (ms={postEchoMs})");
                 }, TaskScheduler.Default);
             }
+        }
+        else if (usedNonClipboardTextInsert)
+        {
+            deferPasteFlagToTimer = false;
         }
         }
         finally
@@ -5675,6 +5735,322 @@ public partial class PopupWindow : Window
         combo[2].type = Win32.INPUT_KEYBOARD; combo[2].u.ki.wVk = Win32.VK_V; combo[2].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
         combo[3].type = Win32.INPUT_KEYBOARD; combo[3].u.ki.wVk = Win32.VK_CONTROL; combo[3].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
         Win32.SendInput((uint)combo.Length, combo, Marshal.SizeOf<Win32.INPUT>());
+    }
+
+    /// <summary>文本回退路径：完全绕过系统剪贴板，直接向目标窗口注入 Unicode 按键。</summary>
+    private static bool TryDirectTypeTextToTarget(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return false;
+
+        ReleaseHeldModifiersForDirectText();
+        Thread.Sleep(1);
+
+        const int chunkSize = 256;
+        for (var i = 0; i < text.Length; i += chunkSize)
+        {
+            var chunk = text.Substring(i, Math.Min(chunkSize, text.Length - i));
+            if (!SendUnicodeString(chunk))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryDirectInsertTextToFocusedEditControl(IntPtr targetWindow, string text)
+    {
+        if (targetWindow == IntPtr.Zero || string.IsNullOrEmpty(text) || !Win32.IsWindow(targetWindow))
+            return false;
+
+        var fgThread = Win32.GetWindowThreadProcessId(targetWindow, out _);
+        if (fgThread == 0) return false;
+        var curThread = Win32.GetCurrentThreadId();
+        var attached = false;
+        try
+        {
+            if (fgThread != curThread)
+                attached = Win32.AttachThreadInput(curThread, fgThread, true);
+
+            var focus = Win32.GetFocus();
+            if (focus == IntPtr.Zero || !Win32.IsWindow(focus))
+                return false;
+
+            var cls = Win32.GetWindowClassName(focus);
+            if (!IsEditableClass(cls))
+                return false;
+
+            var style = Win32.GetWindowLongPtr(focus, Win32.GWL_STYLE).ToInt64();
+            if ((style & Win32.ES_READONLY) != 0)
+                return false;
+
+            _ = Win32.SendMessage(focus, Win32.EM_REPLACESEL, new IntPtr(1), text);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (attached)
+                Win32.AttachThreadInput(curThread, fgThread, false);
+        }
+    }
+
+    /// <summary>
+    /// 第二层非剪贴板文本插入：对支持 UIA ValuePattern 的控件，按当前选区重建完整文本再 SetValue。
+    /// 比 Unicode 注入更接近“粘贴语义”，但仍避免写系统剪贴板。
+    /// </summary>
+    private static bool TryReplaceFocusedTextViaUiAutomation(IntPtr targetWindow, string text)
+    {
+        if (targetWindow == IntPtr.Zero || string.IsNullOrEmpty(text) || !Win32.IsWindow(targetWindow))
+            return false;
+
+        try
+        {
+            var focused = System.Windows.Automation.AutomationElement.FocusedElement;
+            if (focused == null)
+                return false;
+
+            var nativeHandle = new IntPtr(focused.Current.NativeWindowHandle);
+            if (nativeHandle != IntPtr.Zero
+                && nativeHandle != targetWindow
+                && Win32.GetAncestor(nativeHandle, Win32.GA_ROOT) != targetWindow)
+            {
+                return false;
+            }
+
+            if (!focused.TryGetCurrentPattern(
+                    System.Windows.Automation.ValuePattern.Pattern, out var valuePatternObj))
+            {
+                return false;
+            }
+
+            var valuePattern = (System.Windows.Automation.ValuePattern)valuePatternObj;
+            if (valuePattern.Current.IsReadOnly)
+                return false;
+
+            var currentValue = valuePattern.Current.Value ?? string.Empty;
+            if (TryGetFocusedSelectionOffsetsViaUiAutomation(focused, currentValue, out var start, out var end))
+            {
+                start = MapNormalizedOffsetToOriginalIndex(currentValue, start);
+                end = MapNormalizedOffsetToOriginalIndex(currentValue, end);
+                valuePattern.SetValue(currentValue[..start] + text + currentValue[end..]);
+                return true;
+            }
+
+            if (currentValue.Length == 0)
+            {
+                valuePattern.SetValue(text);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            ClipboardDiagnosticsLog.Write($"paste text uiaReplace EX {ex.GetType().Name}: {ex.Message}");
+        }
+
+        return false;
+    }
+
+    private static bool TryGetFocusedSelectionOffsetsViaUiAutomation(
+        System.Windows.Automation.AutomationElement focused,
+        string currentValue,
+        out int start,
+        out int end)
+    {
+        start = 0;
+        end = 0;
+
+        if (!focused.TryGetCurrentPattern(
+                System.Windows.Automation.TextPattern.Pattern, out var textPatternObj))
+        {
+            return false;
+        }
+
+        var textPattern = (System.Windows.Automation.TextPattern)textPatternObj;
+        var selections = textPattern.GetSelection();
+        if (selections == null || selections.Length == 0)
+            return false;
+
+        try
+        {
+            var selection = selections[0];
+            var document = textPattern.DocumentRange;
+            if (document == null)
+                return false;
+
+            var beforeSelection = document.Clone();
+            beforeSelection.MoveEndpointByRange(
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.End,
+                selection,
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.Start);
+
+            var beforeText = beforeSelection.GetText(-1) ?? string.Empty;
+            start = NormalizeUiAutomationTextForOffset(beforeText).Length;
+
+            var throughSelection = document.Clone();
+            throughSelection.MoveEndpointByRange(
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.End,
+                selection,
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.End);
+
+            var throughText = throughSelection.GetText(-1) ?? string.Empty;
+            end = NormalizeUiAutomationTextForOffset(throughText).Length;
+
+            if (start > currentValue.Length || end > currentValue.Length)
+            {
+                start = Math.Min(start, currentValue.Length);
+                end = Math.Min(end, currentValue.Length);
+            }
+
+            return end >= start;
+        }
+        catch (Exception ex)
+        {
+            ClipboardDiagnosticsLog.Write($"paste text uiaSelection EX {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static string NormalizeUiAutomationTextForOffset(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return string.Empty;
+
+        // UIA often normalizes line endings to CRLF. Align offsets with the .NET string we later splice.
+        return text.Replace("\r\n", "\n").Replace('\r', '\n');
+    }
+
+    private static int MapNormalizedOffsetToOriginalIndex(string original, int normalizedOffset)
+    {
+        if (normalizedOffset <= 0 || string.IsNullOrEmpty(original))
+            return 0;
+
+        var seen = 0;
+        for (var i = 0; i < original.Length; i++)
+        {
+            if (seen >= normalizedOffset)
+                return i;
+
+            if (original[i] == '\r')
+            {
+                if (i + 1 < original.Length && original[i + 1] == '\n')
+                    i++;
+                seen++;
+                continue;
+            }
+
+            seen++;
+        }
+
+        return original.Length;
+    }
+
+    private static bool IsEditableClass(string cls)
+    {
+        if (string.IsNullOrEmpty(cls)) return false;
+        return cls.Equals("Edit", StringComparison.OrdinalIgnoreCase)
+               || cls.StartsWith("RICHEDIT", StringComparison.OrdinalIgnoreCase)
+               || cls.StartsWith("WindowsForms10.EDIT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ReleaseHeldModifiersForDirectText()
+    {
+        var heldKeys = new List<ushort>(6);
+        if ((Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0) heldKeys.Add(Win32.VK_LSHIFT);
+        if ((Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0) heldKeys.Add(Win32.VK_RSHIFT);
+        if ((Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0) heldKeys.Add(Win32.VK_CONTROL);
+        if ((Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0) heldKeys.Add(Win32.VK_MENU);
+        if ((Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0) heldKeys.Add(Win32.VK_LWIN);
+        if ((Win32.GetAsyncKeyState(Win32.VK_RWIN) & 0x8000) != 0) heldKeys.Add(Win32.VK_RWIN);
+
+        if (heldKeys.Count == 0)
+            return;
+
+        var release = new Win32.INPUT[heldKeys.Count];
+        for (var i = 0; i < heldKeys.Count; i++)
+        {
+            release[i].type = Win32.INPUT_KEYBOARD;
+            release[i].u.ki.wVk = heldKeys[i];
+            release[i].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP;
+        }
+
+        Win32.SendInput((uint)release.Length, release, Marshal.SizeOf<Win32.INPUT>());
+    }
+
+    private static bool SendUnicodeString(string text)
+    {
+        var buffer = new List<Win32.INPUT>(text.Length * 2);
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+
+            // Prefer real Enter key events for line breaks; many editors treat injected '\n'
+            // differently from an actual newline command.
+            if (c == '\r')
+            {
+                if (i + 1 < text.Length && text[i + 1] == '\n')
+                    i++;
+                AddVirtualKeyPress(buffer, (ushort)Win32.VK_RETURN);
+                continue;
+            }
+            if (c == '\n')
+            {
+                AddVirtualKeyPress(buffer, (ushort)Win32.VK_RETURN);
+                continue;
+            }
+            if (c == '\t')
+            {
+                AddVirtualKeyPress(buffer, 0x09);
+                continue;
+            }
+
+            var u = (ushort)c;
+            buffer.Add(new Win32.INPUT
+            {
+                type = Win32.INPUT_KEYBOARD,
+                u = new Win32.INPUTUNION
+                {
+                    ki = new Win32.KEYBDINPUT { wVk = 0, wScan = u, dwFlags = Win32.KEYEVENTF_UNICODE }
+                }
+            });
+            buffer.Add(new Win32.INPUT
+            {
+                type = Win32.INPUT_KEYBOARD,
+                u = new Win32.INPUTUNION
+                {
+                    ki = new Win32.KEYBDINPUT { wVk = 0, wScan = u, dwFlags = Win32.KEYEVENTF_UNICODE | Win32.KEYEVENTF_KEYUP }
+                }
+            });
+        }
+
+        if (buffer.Count == 0)
+            return false;
+
+        var inputs = buffer.ToArray();
+        var sent = Win32.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Win32.INPUT>());
+        return sent == inputs.Length;
+    }
+
+    private static void AddVirtualKeyPress(List<Win32.INPUT> buffer, ushort vk)
+    {
+        buffer.Add(new Win32.INPUT
+        {
+            type = Win32.INPUT_KEYBOARD,
+            u = new Win32.INPUTUNION
+            {
+                ki = new Win32.KEYBDINPUT { wVk = vk, wScan = 0, dwFlags = 0 }
+            }
+        });
+        buffer.Add(new Win32.INPUT
+        {
+            type = Win32.INPUT_KEYBOARD,
+            u = new Win32.INPUTUNION
+            {
+                ki = new Win32.KEYBDINPUT { wVk = vk, wScan = 0, dwFlags = Win32.KEYEVENTF_KEYUP }
+            }
+        });
     }
 
     /// <summary>文本是否为严格 JSON（<see cref="JsonDocument"/> 可解析，不允许注释与尾逗号）。</summary>

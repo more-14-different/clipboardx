@@ -488,6 +488,7 @@ internal static class Win32
     public const uint WM_SETTEXT = 0x000C;
     public const uint WM_GETTEXT = 0x000D;
     public const uint WM_GETTEXTLENGTH = 0x000E;
+    public const uint EM_REPLACESEL = 0x00C2;
 
     /// <summary>CDM_GETFOLDERPATH — 向 #32770 共用对话框发送以获取当前文件夹路径（WM_USER + 0x66）。</summary>
     public const uint CDM_GETFOLDERPATH = 0x0400 + 0x0066;
