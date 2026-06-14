@@ -94,6 +94,12 @@ public partial class App : Application
 
         AppPaths.Initialize(PerUserInstall.IsRunningFromInstallLocation());
 
+        if (AltVClipboardProvider.TryHandleCommandLine(e.Args, out var providerExitCode))
+        {
+            Shutdown(providerExitCode);
+            return;
+        }
+
         // WinForms 托盘/上下文菜单在 WPF 宿主中更稳妥
         WinForms.Application.EnableVisualStyles();
         WinForms.Application.SetCompatibleTextRenderingDefault(false);
