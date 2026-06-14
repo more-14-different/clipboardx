@@ -2154,9 +2154,14 @@ public partial class PopupWindow : Window
             {
                 if (!usedNonClipboardBatchInsert)
                 {
-                    SendPasteToTarget();
+                    var pasteDispatch = SendPasteToTarget();
+                    LogPasteSuccessPath("paste batchText", "clipboardProvider", pasteDispatch);
                     if (providerSession != null)
-                        await Task.Delay(180);
+                        await AwaitClipboardProviderSettleAsync(_targetWindow, pasteDispatch.Mode, noSegmentDelays: false);
+                }
+                else
+                {
+                    ClipboardDiagnosticsLog.Write("paste batchText success path=directText mode=nonClipboard");
                 }
             }
 
@@ -5686,7 +5691,8 @@ public partial class PopupWindow : Window
                     await Task.Delay(prePasteDelayMs);
             }
 
-            SendPasteToTarget();
+            var pasteDispatch = SendPasteToTarget();
+            LogPasteSuccessPath("paste", "clipboardProvider", pasteDispatch);
 
             // 连续粘贴：整轮结束后再 TailSettle；段间另有 SequentialInterSegmentDelayMs。
             // 单次粘贴：以前同步 await 600ms 回波窗口，导致「按完按钮要等一下」的卡顿；
@@ -5704,6 +5710,7 @@ public partial class PopupWindow : Window
         }
         else if (usedNonClipboardTextInsert)
         {
+            ClipboardDiagnosticsLog.Write("paste success path=directText mode=nonClipboard");
             deferPasteFlagToTimer = false;
         }
         }
@@ -5712,7 +5719,7 @@ public partial class PopupWindow : Window
             if (providerSession != null)
             {
                 if (clipboardOk && !usedNonClipboardTextInsert)
-                    await Task.Delay(noSegmentDelays ? 80 : 180);
+                    await AwaitClipboardProviderSettleAsync(_targetWindow, modeHint: null, noSegmentDelays);
                 await providerSession.DisposeAsync();
             }
             if (!_sequentialPasteHold && !deferPasteFlagToTimer)
@@ -5721,17 +5728,62 @@ public partial class PopupWindow : Window
     }
 
     /// <summary>按设置向目标窗口发送粘贴（Ctrl+V 或 Shift+Insert）。</summary>
-    private void SendPasteToTarget()
+    private PasteTargetHeuristics.PasteDispatchDecision SendPasteToTarget()
     {
-        var mode = PasteSimulationModes.Normalize(_appSettings?.PasteSimulationMode);
-        // 命令行/终端对 Ctrl+V 支持不一，检测到则临时改用 Shift+Insert（不改保存的设置）。
-        if (mode == PasteSimulationModes.CtrlV && PasteTargetHeuristics.IsLikelyConsoleOrTerminal(_targetWindow))
-            mode = PasteSimulationModes.ShiftInsert;
+        var decision = PasteTargetHeuristics.DecideMode(_targetWindow, _appSettings?.PasteSimulationMode ?? PasteSimulationModes.CtrlV);
 
-        if (mode == PasteSimulationModes.ShiftInsert)
+        if (decision.Mode == PasteSimulationModes.ShiftInsert)
             SendShiftInsertPaste();
         else
             SendCtrlVPaste();
+
+        return decision;
+    }
+
+    private async Task AwaitClipboardProviderSettleAsync(IntPtr targetWindow, string? modeHint, bool noSegmentDelays)
+    {
+        var minHoldMs = noSegmentDelays ? 55 : 85;
+        var maxHoldMs = noSegmentDelays ? 120 : 240;
+        var stableAfterForegroundShiftMs = 45;
+        var sw = Stopwatch.StartNew();
+        var switchedAwayAtMs = -1L;
+
+        while (sw.ElapsedMilliseconds < maxHoldMs)
+        {
+            await Task.Delay(15);
+
+            var fg = Win32.GetForegroundWindow();
+            if (sw.ElapsedMilliseconds < minHoldMs)
+                continue;
+
+            if (targetWindow == IntPtr.Zero || !Win32.IsWindow(targetWindow))
+                break;
+
+            if (fg != IntPtr.Zero && fg != targetWindow)
+            {
+                if (switchedAwayAtMs < 0)
+                    switchedAwayAtMs = sw.ElapsedMilliseconds;
+                else if (sw.ElapsedMilliseconds - switchedAwayAtMs >= stableAfterForegroundShiftMs)
+                    break;
+            }
+            else
+            {
+                switchedAwayAtMs = -1;
+            }
+        }
+
+        ClipboardDiagnosticsLog.Write(
+            $"paste providerSettle elapsedMs={sw.ElapsedMilliseconds} target=0x{targetWindow.ToInt64():X} mode={modeHint ?? "-"}");
+    }
+
+    private void LogPasteSuccessPath(
+        string logTag,
+        string path,
+        PasteTargetHeuristics.PasteDispatchDecision dispatch)
+    {
+        ClipboardDiagnosticsLog.Write(
+            $"{logTag} success path={path} shortcut={dispatch.Mode} reason={dispatch.Reason} " +
+            $"target=0x{_targetWindow.ToInt64():X} proc={dispatch.ProcessName} class={dispatch.WindowClass} title=\"{dispatch.WindowTitle}\"");
     }
 
     // Shift+Insert 是系统级粘贴，但 Excel 对模拟输入更挑：

@@ -8,6 +8,13 @@ namespace ClipboardManager;
 /// </summary>
 internal static class PasteTargetHeuristics
 {
+    internal readonly record struct PasteDispatchDecision(
+        string Mode,
+        string Reason,
+        string ProcessName,
+        string WindowClass,
+        string WindowTitle);
+
     /// <summary>经典 conhost 控制台、Windows Terminal 宿主等。</summary>
     private static readonly HashSet<string> TerminalWindowClasses = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -30,6 +37,36 @@ internal static class PasteTargetHeuristics
         "wsl",
         "wslhost",
         "wezterm-gui",
+    };
+
+    /// <summary>浏览器 / Chromium / Electron 类宿主，Ctrl+V 往往比 Shift+Insert 更贴近原生行为。</summary>
+    private static readonly HashSet<string> CtrlVPreferredProcessNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "chrome",
+        "msedge",
+        "firefox",
+        "brave",
+        "opera",
+        "vivaldi",
+        "iexplore",
+        "explorer",
+        "electron",
+        "code",
+        "code-insiders",
+        "cursor",
+        "slack",
+        "discord",
+        "notion",
+        "teams",
+        "obsidian",
+    };
+
+    private static readonly HashSet<string> CtrlVPreferredWindowClasses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Chrome_WidgetWin_1",
+        "MozillaWindowClass",
+        "CabinetWClass",
+        "ExploreWClass",
     };
 
     /// <summary>
@@ -59,6 +96,48 @@ internal static class PasteTargetHeuristics
         catch
         {
             return false;
+        }
+    }
+
+    public static PasteDispatchDecision DecideMode(IntPtr hwnd, string configuredMode)
+    {
+        var mode = PasteSimulationModes.Normalize(configuredMode);
+        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd))
+            return new PasteDispatchDecision(mode, "default:no-target", "", "", "");
+
+        var cls = Win32.GetWindowClassName(hwnd);
+        var title = Win32.GetWindowText(hwnd);
+        var processName = TryGetProcessName(hwnd);
+
+        if ((cls.Length > 0 && TerminalWindowClasses.Contains(cls)) ||
+            (processName.Length > 0 && TerminalProcessNames.Contains(processName)))
+        {
+            return new PasteDispatchDecision(PasteSimulationModes.ShiftInsert, "terminal", processName, cls, title);
+        }
+
+        if ((cls.Length > 0 && CtrlVPreferredWindowClasses.Contains(cls)) ||
+            (processName.Length > 0 && CtrlVPreferredProcessNames.Contains(processName)))
+        {
+            return new PasteDispatchDecision(PasteSimulationModes.CtrlV, "ctrlv-preferred-host", processName, cls, title);
+        }
+
+        return new PasteDispatchDecision(mode, "configured-default", processName, cls, title);
+    }
+
+    private static string TryGetProcessName(IntPtr hwnd)
+    {
+        _ = Win32.GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == 0)
+            return "";
+
+        try
+        {
+            using var p = Process.GetProcessById((int)pid);
+            return p.ProcessName ?? "";
+        }
+        catch
+        {
+            return "";
         }
     }
 }
