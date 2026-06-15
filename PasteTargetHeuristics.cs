@@ -15,88 +15,81 @@ internal static class PasteTargetHeuristics
         string WindowClass,
         string WindowTitle);
 
-    /// <summary>经典 conhost 控制台、Windows Terminal 宿主等。</summary>
-    private static readonly HashSet<string> TerminalWindowClasses = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "ConsoleWindowClass",
-        "CASCADIA_HOSTING_WINDOW_CLASS",
-    };
+    private sealed record TargetSnapshot(string ProcessName, string WindowClass, string WindowTitle);
 
-    /// <summary>常见终端相关进程（不含扩展名）。</summary>
-    private static readonly HashSet<string> TerminalProcessNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "cmd",
-        "powershell",
-        "pwsh",
-        "windowsterminal",
-        "wt",
-        "openconsole",
-        "conhost",
-        "mintty",
-        "bash",
-        "wsl",
-        "wslhost",
-        "wezterm-gui",
-    };
+    private sealed record PasteTargetProfile(
+        string Mode,
+        string Reason,
+        IReadOnlySet<string> ProcessNames,
+        IReadOnlySet<string> WindowClasses);
 
-    /// <summary>浏览器 / Chromium / Electron 类宿主，Ctrl+V 往往比 Shift+Insert 更贴近原生行为。</summary>
-    private static readonly HashSet<string> CtrlVPreferredProcessNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "chrome",
-        "msedge",
-        "firefox",
-        "brave",
-        "opera",
-        "vivaldi",
-        "iexplore",
-        "explorer",
-        "electron",
-        "code",
-        "code-insiders",
-        "cursor",
-        "slack",
-        "discord",
-        "notion",
-        "teams",
-        "obsidian",
-    };
+    private static readonly PasteTargetProfile TerminalProfile = new(
+        PasteSimulationModes.ShiftInsert,
+        "terminal",
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "cmd",
+            "powershell",
+            "pwsh",
+            "windowsterminal",
+            "wt",
+            "openconsole",
+            "conhost",
+            "mintty",
+            "bash",
+            "wsl",
+            "wslhost",
+            "wezterm-gui",
+        },
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ConsoleWindowClass",
+            "CASCADIA_HOSTING_WINDOW_CLASS",
+        });
 
-    private static readonly HashSet<string> CtrlVPreferredWindowClasses = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Chrome_WidgetWin_1",
-        "MozillaWindowClass",
-        "CabinetWClass",
-        "ExploreWClass",
-    };
+    private static readonly PasteTargetProfile CtrlVPreferredHostProfile = new(
+        PasteSimulationModes.CtrlV,
+        "ctrlv-preferred-host",
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "chrome",
+            "msedge",
+            "firefox",
+            "brave",
+            "opera",
+            "vivaldi",
+            "iexplore",
+            "explorer",
+            "electron",
+            "code",
+            "code-insiders",
+            "cursor",
+            "slack",
+            "discord",
+            "notion",
+            "teams",
+            "obsidian",
+        },
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Chrome_WidgetWin_1",
+            "MozillaWindowClass",
+            "CabinetWClass",
+            "ExploreWClass",
+        });
+
+    private static readonly IReadOnlyList<PasteTargetProfile> DispatchProfiles =
+    [
+        TerminalProfile,
+        CtrlVPreferredHostProfile,
+    ];
 
     /// <summary>
     /// 若用户配置为 Ctrl+V，检测到终端/控制台时可临时改用 Shift+Insert。
     /// </summary>
     public static bool IsLikelyConsoleOrTerminal(IntPtr hwnd)
     {
-        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd))
-            return false;
-
-        var cls = Win32.GetWindowClassName(hwnd);
-        if (cls.Length > 0 && TerminalWindowClasses.Contains(cls))
-            return true;
-
-        _ = Win32.GetWindowThreadProcessId(hwnd, out uint pid);
-        if (pid == 0)
-            return false;
-
-        try
-        {
-            using var p = Process.GetProcessById((int)pid);
-            var name = p.ProcessName;
-            if (string.IsNullOrEmpty(name))
-                return false;
-            return TerminalProcessNames.Contains(name);
-        }
-        catch
-        {
-            return false;
-        }
+        return TryCaptureTarget(hwnd, out var snapshot) && MatchesProfile(snapshot, TerminalProfile);
     }
 
     public static PasteDispatchDecision DecideMode(IntPtr hwnd, string configuredMode)
@@ -105,23 +98,35 @@ internal static class PasteTargetHeuristics
         if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd))
             return new PasteDispatchDecision(mode, "default:no-target", "", "", "");
 
-        var cls = Win32.GetWindowClassName(hwnd);
-        var title = Win32.GetWindowText(hwnd);
+        if (!TryCaptureTarget(hwnd, out var snapshot))
+            return new PasteDispatchDecision(mode, "configured-default", "", "", "");
+
+        foreach (var profile in DispatchProfiles)
+        {
+            if (MatchesProfile(snapshot, profile))
+                return new PasteDispatchDecision(profile.Mode, profile.Reason, snapshot.ProcessName, snapshot.WindowClass, snapshot.WindowTitle);
+        }
+
+        return new PasteDispatchDecision(mode, "configured-default", snapshot.ProcessName, snapshot.WindowClass, snapshot.WindowTitle);
+    }
+
+    private static bool TryCaptureTarget(IntPtr hwnd, out TargetSnapshot snapshot)
+    {
+        snapshot = new TargetSnapshot("", "", "");
+        if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd))
+            return false;
+
+        var windowClass = Win32.GetWindowClassName(hwnd);
+        var windowTitle = Win32.GetWindowText(hwnd);
         var processName = TryGetProcessName(hwnd);
+        snapshot = new TargetSnapshot(processName, windowClass, windowTitle);
+        return true;
+    }
 
-        if ((cls.Length > 0 && TerminalWindowClasses.Contains(cls)) ||
-            (processName.Length > 0 && TerminalProcessNames.Contains(processName)))
-        {
-            return new PasteDispatchDecision(PasteSimulationModes.ShiftInsert, "terminal", processName, cls, title);
-        }
-
-        if ((cls.Length > 0 && CtrlVPreferredWindowClasses.Contains(cls)) ||
-            (processName.Length > 0 && CtrlVPreferredProcessNames.Contains(processName)))
-        {
-            return new PasteDispatchDecision(PasteSimulationModes.CtrlV, "ctrlv-preferred-host", processName, cls, title);
-        }
-
-        return new PasteDispatchDecision(mode, "configured-default", processName, cls, title);
+    private static bool MatchesProfile(TargetSnapshot snapshot, PasteTargetProfile profile)
+    {
+        return (snapshot.WindowClass.Length > 0 && profile.WindowClasses.Contains(snapshot.WindowClass)) ||
+               (snapshot.ProcessName.Length > 0 && profile.ProcessNames.Contains(snapshot.ProcessName));
     }
 
     private static string TryGetProcessName(IntPtr hwnd)
