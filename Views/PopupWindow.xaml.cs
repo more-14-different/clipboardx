@@ -2121,7 +2121,8 @@ public partial class PopupWindow : Window
                 Win32.TryEmptyClipboardAfterOpen(_hwnd);
 
             _isSettingClipboard = true;
-            var textClipboard = await TrySetTextViaPreferredClipboardPathAsync(
+            var textPasteSession = CreateAltVTextPasteSession();
+            var textClipboard = await textPasteSession.PrepareClipboardAsync(
                 combined,
                 "paste batchText",
                 maxRetries: 10,
@@ -2143,7 +2144,7 @@ public partial class PopupWindow : Window
             }
             else
             {
-                ok = TryInsertTextWithoutClipboard(combined, "paste batchText", out usedNonClipboardBatchInsert);
+                ok = textPasteSession.TryInsertWithoutClipboard(combined, "paste batchText", out usedNonClipboardBatchInsert);
             }
             // 不立刻清 _isSettingClipboard：必须等本次 SetText 触发的 WM_CLIPBOARDUPDATE 派发完，
             // 否则该消息到达时旗已落，OnClipboardUpdate 会把合并文本当成「用户复制」入库。
@@ -2154,10 +2155,10 @@ public partial class PopupWindow : Window
             {
                 if (!usedNonClipboardBatchInsert)
                 {
-                    var pasteDispatch = SendPasteToTarget();
-                    LogPasteSuccessPath("paste batchText", "clipboardProvider", pasteDispatch);
+                    var pasteDispatch = textPasteSession.DispatchPaste();
+                    textPasteSession.LogSuccessPath("paste batchText", "clipboardProvider", pasteDispatch);
                     if (providerSession != null)
-                        await AwaitClipboardProviderSettleAsync(_targetWindow, pasteDispatch.Mode, noSegmentDelays: false);
+                        await textPasteSession.AwaitProviderSettleAsync(noSegmentDelays: false);
                 }
                 else
                 {
@@ -5409,47 +5410,29 @@ public partial class PopupWindow : Window
         return result.Success;
     }
 
-    private async Task<(ClipboardSetResult Result, AltVClipboardProvider.Session? ProviderSession)> TrySetTextViaPreferredClipboardPathAsync(
+    private AltVTextPasteSession CreateAltVTextPasteSession() =>
+        new(
+            _targetWindow,
+            EnableExternalClipboardProviderForAltV,
+            _appSettings?.PasteSimulationMode ?? PasteSimulationModes.CtrlV,
+            TrySetTextLocallyAsync,
+            text => TryDirectInsertTextToFocusedEditControl(_targetWindow, text),
+            TryDirectTypeTextToTarget,
+            SendCtrlVPaste,
+            SendShiftInsertPaste);
+
+    private async Task<AltVTextPasteSession.ClipboardWriteResult> TrySetTextLocallyAsync(
         string text,
-        string logTag,
         int maxRetries,
         int delayMs)
     {
-        if (EnableExternalClipboardProviderForAltV)
-        {
-            var providerSession = await AltVClipboardProvider.StartTextSessionAsync(text);
-            var providerResult = providerSession.Result;
-            ClipboardDiagnosticsLog.Write(
-                $"{logTag} clipboardProvider ok={providerResult.Success} locked={providerResult.ClipboardLocked} len={text.Length}" +
-                (string.IsNullOrWhiteSpace(providerResult.Error) ? "" : $" err=\"{providerResult.Error}\""));
-            return (new ClipboardSetResult(providerResult.Success, providerResult.ClipboardLocked), providerSession);
-        }
-
         var directResult = await TrySetClipboardDetailedAsync(
             () => System.Windows.Clipboard.SetText(text),
             $"SetText len={text.Length}",
             maxRetries: maxRetries,
             delayMs: delayMs,
             clipNudgeHwnd: _hwnd);
-        ClipboardDiagnosticsLog.Write(
-            $"{logTag} clipboardPrimary ok={directResult.Success} locked={directResult.ClipboardLocked} len={text.Length}");
-        return (directResult, null);
-    }
-
-    private bool TryInsertTextWithoutClipboard(string text, string logTag, out bool usedNonClipboardTextInsert)
-    {
-        usedNonClipboardTextInsert = false;
-
-        var ok = TryDirectInsertTextToFocusedEditControl(_targetWindow, text);
-        usedNonClipboardTextInsert = ok;
-        ClipboardDiagnosticsLog.Write($"{logTag} directInsert ok={ok} len={text.Length}");
-        if (ok)
-            return true;
-
-        ok = TryDirectTypeTextToTarget(text);
-        usedNonClipboardTextInsert = ok;
-        ClipboardDiagnosticsLog.Write($"{logTag} directUnicode ok={ok} len={text.Length}");
-        return ok;
+        return new AltVTextPasteSession.ClipboardWriteResult(directResult.Success, directResult.ClipboardLocked);
     }
 
     private static string DescribeOpenClipboardOwner(IntPtr selfHwnd)
@@ -5500,6 +5483,7 @@ public partial class PopupWindow : Window
         bool usedNonClipboardTextInsert = false;
         AltVClipboardProvider.Session? providerSession = null;
         bool noSegmentDelays = sequentialSegmentIndex >= 0;
+        var textPasteSession = CreateAltVTextPasteSession();
         try
         {
         ClearPendingDelete();
@@ -5574,7 +5558,7 @@ public partial class PopupWindow : Window
                     var clipText = sendNewlineAfterTextWhenCtrlEnterBatch && noSegmentDelays
                         ? item.TextContent! + Environment.NewLine
                         : item.TextContent!;
-                    var textClipboard = await TrySetTextViaPreferredClipboardPathAsync(
+                    var textClipboard = await textPasteSession.PrepareClipboardAsync(
                         clipText,
                         "paste text",
                         maxRetries: noSegmentDelays ? Math.Min(clipRetries, 3) : 1,
@@ -5588,7 +5572,7 @@ public partial class PopupWindow : Window
                     }
                     else
                     {
-                        clipboardOk = TryInsertTextWithoutClipboard(clipText, "paste text", out usedNonClipboardTextInsert);
+                        clipboardOk = textPasteSession.TryInsertWithoutClipboard(clipText, "paste text", out usedNonClipboardTextInsert);
                     }
                     break;
                 }
@@ -5691,8 +5675,8 @@ public partial class PopupWindow : Window
                     await Task.Delay(prePasteDelayMs);
             }
 
-            var pasteDispatch = SendPasteToTarget();
-            LogPasteSuccessPath("paste", "clipboardProvider", pasteDispatch);
+            var pasteDispatch = textPasteSession.DispatchPaste();
+            textPasteSession.LogSuccessPath("paste", "clipboardProvider", pasteDispatch);
 
             // 连续粘贴：整轮结束后再 TailSettle；段间另有 SequentialInterSegmentDelayMs。
             // 单次粘贴：以前同步 await 600ms 回波窗口，导致「按完按钮要等一下」的卡顿；
@@ -5719,7 +5703,7 @@ public partial class PopupWindow : Window
             if (providerSession != null)
             {
                 if (clipboardOk && !usedNonClipboardTextInsert)
-                    await AwaitClipboardProviderSettleAsync(_targetWindow, modeHint: null, noSegmentDelays);
+                    await textPasteSession.AwaitProviderSettleAsync(noSegmentDelays);
                 await providerSession.DisposeAsync();
             }
             if (!_sequentialPasteHold && !deferPasteFlagToTimer)
@@ -5727,63 +5711,14 @@ public partial class PopupWindow : Window
         }
     }
 
-    /// <summary>按设置向目标窗口发送粘贴（Ctrl+V 或 Shift+Insert）。</summary>
-    private PasteTargetHeuristics.PasteDispatchDecision SendPasteToTarget()
+    /// <summary>非文本路径仍复用相同的目标窗口 heuristics。</summary>
+    private void SendPasteToTarget()
     {
         var decision = PasteTargetHeuristics.DecideMode(_targetWindow, _appSettings?.PasteSimulationMode ?? PasteSimulationModes.CtrlV);
-
         if (decision.Mode == PasteSimulationModes.ShiftInsert)
             SendShiftInsertPaste();
         else
             SendCtrlVPaste();
-
-        return decision;
-    }
-
-    private async Task AwaitClipboardProviderSettleAsync(IntPtr targetWindow, string? modeHint, bool noSegmentDelays)
-    {
-        var minHoldMs = noSegmentDelays ? 55 : 85;
-        var maxHoldMs = noSegmentDelays ? 120 : 240;
-        var stableAfterForegroundShiftMs = 45;
-        var sw = Stopwatch.StartNew();
-        var switchedAwayAtMs = -1L;
-
-        while (sw.ElapsedMilliseconds < maxHoldMs)
-        {
-            await Task.Delay(15);
-
-            var fg = Win32.GetForegroundWindow();
-            if (sw.ElapsedMilliseconds < minHoldMs)
-                continue;
-
-            if (targetWindow == IntPtr.Zero || !Win32.IsWindow(targetWindow))
-                break;
-
-            if (fg != IntPtr.Zero && fg != targetWindow)
-            {
-                if (switchedAwayAtMs < 0)
-                    switchedAwayAtMs = sw.ElapsedMilliseconds;
-                else if (sw.ElapsedMilliseconds - switchedAwayAtMs >= stableAfterForegroundShiftMs)
-                    break;
-            }
-            else
-            {
-                switchedAwayAtMs = -1;
-            }
-        }
-
-        ClipboardDiagnosticsLog.Write(
-            $"paste providerSettle elapsedMs={sw.ElapsedMilliseconds} target=0x{targetWindow.ToInt64():X} mode={modeHint ?? "-"}");
-    }
-
-    private void LogPasteSuccessPath(
-        string logTag,
-        string path,
-        PasteTargetHeuristics.PasteDispatchDecision dispatch)
-    {
-        ClipboardDiagnosticsLog.Write(
-            $"{logTag} success path={path} shortcut={dispatch.Mode} reason={dispatch.Reason} " +
-            $"target=0x{_targetWindow.ToInt64():X} proc={dispatch.ProcessName} class={dispatch.WindowClass} title=\"{dispatch.WindowTitle}\"");
     }
 
     // Shift+Insert 是系统级粘贴，但 Excel 对模拟输入更挑：
