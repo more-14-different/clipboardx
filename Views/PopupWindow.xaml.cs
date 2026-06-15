@@ -20,6 +20,7 @@ using Button = System.Windows.Controls.Button;
 using Orientation = System.Windows.Controls.Orientation;
 using TextBox = System.Windows.Controls.TextBox;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using ClipboardManager.Models;
 
 namespace ClipboardManager;
 
@@ -30,7 +31,7 @@ public partial class PopupWindow : Window
     private static readonly bool EnableExternalClipboardProviderForAltV = true;
 
     private readonly List<ClipboardEntry> _allItems = new();
-    private readonly ObservableCollection<ClipboardEntry> _displayItems = new();
+    private readonly BulkObservableCollection<ClipboardEntry> _displayItems = new();
 
     /// <summary>FIFO/LIFO 下：多选 Enter 入队、新复制可自动入队；出队后条目不占批量角标，回到底部列表排序。</summary>
     private readonly List<ClipboardEntry> _batchQueue = new();
@@ -1246,6 +1247,7 @@ public partial class PopupWindow : Window
     {
         CloseEntryPreviewBubble();
         ClearPendingDelete();
+        using var _bulk = _displayItems.BeginBulkUpdate();
         _displayItems.Clear();
         _firstVisibleIndex = 0;
         var query = _searchText.Trim();
