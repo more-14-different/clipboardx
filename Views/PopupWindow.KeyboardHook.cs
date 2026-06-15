@@ -306,7 +306,7 @@ public partial class PopupWindow : Window
         if (_activeFileJumpPicker != null)
             return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
-        if (TextEntryEditPopup.IsOpen)
+        if (_isTextEntryEditPopupOpen)
         {
             if (isKeyDown)
             {
@@ -329,7 +329,7 @@ public partial class PopupWindow : Window
         if (isKeyUp && IsMenuAltVk(kb.vkCode))
         {
             _swallowedMenuAltLatch = false;
-            if (PhraseEditPopup.IsOpen)
+            if (_isPhraseEditPopupOpen)
                 return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
             if (_awaitHotkeyAltChordCleanup && !_ctxAltAwaitRelease)
@@ -341,7 +341,7 @@ public partial class PopupWindow : Window
                 return (IntPtr)1;
             }
 
-            if (BatchMenuPopup.IsOpen)
+            if (_isBatchMenuPopupOpen)
             {
                 if (_ctxAltCloseMenuArmed && !_ctxAltComboDuringRelease)
                     Dispatcher.BeginInvoke(() => { BatchMenuPopup.IsOpen = false; CloseBatchMenuNavUi(); });
@@ -351,7 +351,7 @@ public partial class PopupWindow : Window
                 return (IntPtr)1;
             }
 
-            if (ContextPopup.IsOpen)
+            if (_isContextPopupOpen)
             {
                 if (_ctxAltCloseMenuArmed && !_ctxAltComboDuringRelease)
                     Dispatcher.BeginInvoke(CloseContextMenuPopup);
@@ -372,7 +372,7 @@ public partial class PopupWindow : Window
         if (!isKeyDown)
             return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
 
-        if (PhraseEditPopup.IsOpen)
+        if (_isPhraseEditPopupOpen)
         {
             if (kb.vkCode == Win32.VK_ESCAPE)
             {
@@ -444,7 +444,7 @@ public partial class PopupWindow : Window
             return (IntPtr)1;
         }
 
-        if (BatchMenuPopup.IsOpen)
+        if (_isBatchMenuPopupOpen)
         {
             if (IsMenuAltVk(kb.vkCode))
             {
@@ -481,7 +481,7 @@ public partial class PopupWindow : Window
             }
         }
 
-        if (ContextPopup.IsOpen)
+        if (_isContextPopupOpen)
         {
             if (IsMenuAltVk(kb.vkCode))
             {
@@ -518,7 +518,7 @@ public partial class PopupWindow : Window
             }
         }
 
-        if (IsMenuAltVk(kb.vkCode) && !PhraseEditPopup.IsOpen && !TextEntryEditPopup.IsOpen && !ContextPopup.IsOpen && !BatchMenuPopup.IsOpen)
+        if (IsMenuAltVk(kb.vkCode) && !_isPhraseEditPopupOpen && !_isTextEntryEditPopupOpen && !_isContextPopupOpen && !_isBatchMenuPopupOpen)
         {
             _swallowedMenuAltLatch = true;
             if (!_awaitHotkeyAltChordCleanup)

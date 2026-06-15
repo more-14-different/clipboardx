@@ -39,17 +39,21 @@ public partial class PopupWindow : Window
     {
         if (_mouseHook != IntPtr.Zero) return;
         s_popupMouseHookOwner = this;
-        _mouseHook = Win32.SetWindowsHookEx(
-            Win32.WH_MOUSE_LL, s_popupMouseHookThunk, Win32.GetModuleHandle(null), 0);
-        s_popupMouseHookForNext = _mouseHook;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() =>
+        {
+            _mouseHook = Win32.SetWindowsHookEx(
+                Win32.WH_MOUSE_LL, s_popupMouseHookThunk, Win32.GetModuleHandle(null), 0);
+            s_popupMouseHookForNext = _mouseHook;
+        });
     }
 
     private void UninstallMouseHook()
     {
         if (_mouseHook != IntPtr.Zero)
         {
-            Win32.UnhookWindowsHookEx(_mouseHook);
+            var hk = _mouseHook;
             _mouseHook = IntPtr.Zero;
+            ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() => Win32.UnhookWindowsHookEx(hk));
         }
         if (s_popupMouseHookOwner == this)
         {
@@ -272,7 +276,7 @@ public partial class PopupWindow : Window
                         System.Windows.Threading.DispatcherPriority.Background, () =>
                         {
                             if (_isPopupVisible && !_clickReceivedByPopup
-                                && !ContextPopup.IsOpen && !PhraseEditPopup.IsOpen && !TextEntryEditPopup.IsOpen)
+                                && !_isContextPopupOpen && !_isPhraseEditPopupOpen && !_isTextEntryEditPopupOpen)
                                 HidePopup();
                         });
                 }
@@ -285,9 +289,12 @@ public partial class PopupWindow : Window
     {
         if (_fileJumpAutoMouseHook != IntPtr.Zero) return;
         s_fileJumpAutoMouseOwner = this;
-        _fileJumpAutoMouseHook = Win32.SetWindowsHookEx(
-            Win32.WH_MOUSE_LL, s_fileJumpAutoMouseThunk, Win32.GetModuleHandle(null), 0);
-        s_fileJumpAutoMouseHookForNext = _fileJumpAutoMouseHook;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() =>
+        {
+            _fileJumpAutoMouseHook = Win32.SetWindowsHookEx(
+                Win32.WH_MOUSE_LL, s_fileJumpAutoMouseThunk, Win32.GetModuleHandle(null), 0);
+            s_fileJumpAutoMouseHookForNext = _fileJumpAutoMouseHook;
+        });
     }
 
 #if CLIPX_FILEJUMP
@@ -295,17 +302,21 @@ public partial class PopupWindow : Window
     {
         if (_fileJumpPersistMouseHook != IntPtr.Zero) return;
         s_fileJumpPersistMouseOwner = this;
-        _fileJumpPersistMouseHook = Win32.SetWindowsHookEx(
-            Win32.WH_MOUSE_LL, s_fileJumpPersistMouseThunk, Win32.GetModuleHandle(null), 0);
-        s_fileJumpPersistMouseHookForNext = _fileJumpPersistMouseHook;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() =>
+        {
+            _fileJumpPersistMouseHook = Win32.SetWindowsHookEx(
+                Win32.WH_MOUSE_LL, s_fileJumpPersistMouseThunk, Win32.GetModuleHandle(null), 0);
+            s_fileJumpPersistMouseHookForNext = _fileJumpPersistMouseHook;
+        });
     }
 
     private void UninstallFileJumpPersistFolderHook()
     {
         if (_fileJumpPersistMouseHook != IntPtr.Zero)
         {
-            Win32.UnhookWindowsHookEx(_fileJumpPersistMouseHook);
+            var hk = _fileJumpPersistMouseHook;
             _fileJumpPersistMouseHook = IntPtr.Zero;
+            ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() => Win32.UnhookWindowsHookEx(hk));
         }
 
         if (s_fileJumpPersistMouseOwner == this)

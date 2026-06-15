@@ -60,6 +60,7 @@ public partial class FileDialogJumpPickerWindow : Window
     private IntPtr _jumpPickerMouseHook;
     private bool _clickReceivedByJumpPicker;
     private bool _suppressDismissForSubDialog;
+    private volatile bool _isPickerReadyForMouseHook;
 
     private IntPtr _jumpPickerWinEventHook;
     private IntPtr _ownerDestroyHook;
@@ -320,9 +321,12 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         if (_jumpPickerMouseHook != IntPtr.Zero) return;
         s_jumpPickerMouseOwner = this;
-        _jumpPickerMouseHook = Win32.SetWindowsHookEx(
-            Win32.WH_MOUSE_LL, s_jumpPickerMouseThunk, Win32.GetModuleHandle(null), 0);
-        s_jumpPickerMouseHookForNext = _jumpPickerMouseHook;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() =>
+        {
+            _jumpPickerMouseHook = Win32.SetWindowsHookEx(
+                Win32.WH_MOUSE_LL, s_jumpPickerMouseThunk, Win32.GetModuleHandle(null), 0);
+            s_jumpPickerMouseHookForNext = _jumpPickerMouseHook;
+        });
 
         if (_jumpPickerWinEventHook == IntPtr.Zero)
         {
@@ -338,8 +342,9 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         if (_jumpPickerMouseHook != IntPtr.Zero)
         {
-            Win32.UnhookWindowsHookEx(_jumpPickerMouseHook);
+            var hk = _jumpPickerMouseHook;
             _jumpPickerMouseHook = IntPtr.Zero;
+            ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() => Win32.UnhookWindowsHookEx(hk));
         }
         if (s_jumpPickerMouseOwner == this)
         {
@@ -441,7 +446,7 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private IntPtr JumpPickerMouseHookProc(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && IsLoaded && Opacity > 0)
+        if (nCode >= 0 && _isPickerReadyForMouseHook)
         {
             var msg = wParam.ToInt32();
             if (msg is Win32.WM_LBUTTONDOWN or Win32.WM_RBUTTONDOWN)
@@ -515,16 +520,20 @@ public partial class FileDialogJumpPickerWindow : Window
     {
         if (_jumpKeyboardHook != IntPtr.Zero) return;
         s_jumpPickerKbOwner = this;
-        _jumpKeyboardHook = Win32.SetWindowsHookEx(
-            Win32.WH_KEYBOARD_LL, s_jumpPickerKbThunk, Win32.GetModuleHandle(null), 0);
-        s_jumpPickerKbHookForNext = _jumpKeyboardHook;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() =>
+        {
+            _jumpKeyboardHook = Win32.SetWindowsHookEx(
+                Win32.WH_KEYBOARD_LL, s_jumpPickerKbThunk, Win32.GetModuleHandle(null), 0);
+            s_jumpPickerKbHookForNext = _jumpKeyboardHook;
+        });
     }
 
     private void UninstallKeyboardHook()
     {
         if (_jumpKeyboardHook == IntPtr.Zero) return;
-        Win32.UnhookWindowsHookEx(_jumpKeyboardHook);
+        var hk = _jumpKeyboardHook;
         _jumpKeyboardHook = IntPtr.Zero;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() => Win32.UnhookWindowsHookEx(hk));
         if (s_jumpPickerKbOwner == this)
         {
             s_jumpPickerKbOwner = null;
@@ -1223,6 +1232,7 @@ public partial class FileDialogJumpPickerWindow : Window
         }
 
         Opacity = 1.0;
+        _isPickerReadyForMouseHook = true;
         if (!_autoForegroundStickyMode)
             InstallJumpPickerOutsideHooks();
         if (_dockBesideDialog)

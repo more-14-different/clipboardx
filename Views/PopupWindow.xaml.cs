@@ -284,11 +284,31 @@ public partial class PopupWindow : Window
     /// <summary>批量模式（普通 / LIFO / FIFO）切换后通知，用于托盘图标等。</summary>
     public event EventHandler? BatchPasteModeChanged;
 
+    private volatile bool _isPhraseEditPopupOpen;
+    private volatile bool _isTextEntryEditPopupOpen;
+    private volatile bool _isBatchMenuPopupOpen;
+    private volatile bool _isContextPopupOpen;
+    private volatile bool _isShortcutHelpPopupOpen;
+    private volatile bool _isEntryPreviewPopupOpen;
+
     public PopupWindow()
     {
         InitializeComponent();
         ItemsList.ItemsSource = _displayItems;
         ItemsList.SelectionChanged += ItemsList_SelectionChanged;
+
+        PhraseEditPopup.Opened += (s, e) => _isPhraseEditPopupOpen = true;
+        PhraseEditPopup.Closed += (s, e) => _isPhraseEditPopupOpen = false;
+        TextEntryEditPopup.Opened += (s, e) => _isTextEntryEditPopupOpen = true;
+        TextEntryEditPopup.Closed += (s, e) => _isTextEntryEditPopupOpen = false;
+        BatchMenuPopup.Opened += (s, e) => _isBatchMenuPopupOpen = true;
+        BatchMenuPopup.Closed += (s, e) => _isBatchMenuPopupOpen = false;
+        ContextPopup.Opened += (s, e) => _isContextPopupOpen = true;
+        ContextPopup.Closed += (s, e) => _isContextPopupOpen = false;
+        ShortcutHelpPopup.Opened += (s, e) => _isShortcutHelpPopupOpen = true;
+        ShortcutHelpPopup.Closed += (s, e) => _isShortcutHelpPopupOpen = false;
+        EntryPreviewPopup.Opened += (s, e) => _isEntryPreviewPopupOpen = true;
+        EntryPreviewPopup.Closed += (s, e) => _isEntryPreviewPopupOpen = false;
     }
 
     public void Initialize(AppSettings settings)
@@ -3245,17 +3265,21 @@ public partial class PopupWindow : Window
     {
         if (_keyboardHook != IntPtr.Zero) return;
         s_popupKeyboardHookOwner = this;
-        _keyboardHook = Win32.SetWindowsHookEx(
-            Win32.WH_KEYBOARD_LL, s_popupKeyboardHookThunk, Win32.GetModuleHandle(null), 0);
-        s_popupKeyboardHookForNext = _keyboardHook;
+        ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() =>
+        {
+            _keyboardHook = Win32.SetWindowsHookEx(
+                Win32.WH_KEYBOARD_LL, s_popupKeyboardHookThunk, Win32.GetModuleHandle(null), 0);
+            s_popupKeyboardHookForNext = _keyboardHook;
+        });
     }
 
     private void UninstallKeyboardHook()
     {
         if (_keyboardHook != IntPtr.Zero)
         {
-            Win32.UnhookWindowsHookEx(_keyboardHook);
+            var hk = _keyboardHook;
             _keyboardHook = IntPtr.Zero;
+            ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() => Win32.UnhookWindowsHookEx(hk));
         }
         if (s_popupKeyboardHookOwner == this)
         {
@@ -4759,8 +4783,9 @@ public partial class PopupWindow : Window
         _fileJumpAutoArmedRoot = IntPtr.Zero;
         if (_fileJumpAutoMouseHook != IntPtr.Zero)
         {
-            Win32.UnhookWindowsHookEx(_fileJumpAutoMouseHook);
+            var hk = _fileJumpAutoMouseHook;
             _fileJumpAutoMouseHook = IntPtr.Zero;
+            ClipboardManager.Services.GlobalHookDispatcher.Dispatcher.Invoke(() => Win32.UnhookWindowsHookEx(hk));
         }
         if (s_fileJumpAutoMouseOwner == this)
         {
