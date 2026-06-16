@@ -36,6 +36,7 @@ public partial class PopupWindow : Window
     /// <summary>FIFO/LIFO 下：多选 Enter 入队、新复制可自动入队；出队后条目不占批量角标，回到底部列表排序。</summary>
     private readonly List<ClipboardEntry> _batchQueue = new();
 #if CLIPX_CLIPBOARD
+    private AltVClipboardProvider.Session? _batchQueueProviderSession;
     /// <summary>全局 Ctrl+V / Shift+Insert 松键出队防抖（毫秒，TickCount64）。</summary>
     private long _lastGlobalPasteQueueAdvanceTick;
     /// <summary>FIFO/LIFO 下列队已贴完，等待下一次他处粘键后切回普通模式（<see cref="AppSettings.BatchQueueAutoSwitchToNormalAfterQueueDone"/>）。</summary>
@@ -521,6 +522,11 @@ public partial class PopupWindow : Window
         _historyStore.DeleteAll();
         _allItems.RemoveAll(x => !x.IsQuickPaste);
         _batchQueue.Clear();
+        if (_batchQueueProviderSession != null)
+        {
+            _ = _batchQueueProviderSession.DisposeAsync();
+            _batchQueueProviderSession = null;
+        }
         UpdateBatchOrderProperties();
         RefreshFilter();
         SyncBatchPasteKeyboardHook();
@@ -1385,7 +1391,16 @@ public partial class PopupWindow : Window
         var prev = GetBatchMode();
         _appSettings.BatchPasteMode = mode.ToString();
         if (mode == BatchPasteQueueMode.Off)
+        {
             _batchQueue.Clear();
+#if CLIPX_CLIPBOARD
+            if (_batchQueueProviderSession != null)
+            {
+                _ = _batchQueueProviderSession.DisposeAsync();
+                _batchQueueProviderSession = null;
+            }
+#endif
+        }
         _appSettings.Save();
         UpdateBatchHeaderUi();
         UpdateBatchOrderProperties();
@@ -1656,13 +1671,19 @@ public partial class PopupWindow : Window
                     switch (item.Type)
                     {
                         case EntryType.Text:
-                            ok = await TrySetClipboardAsync(
-                                () => System.Windows.Clipboard.SetText(item.TextContent ?? ""),
-                                $"queueHead SetText len={item.TextContent?.Length ?? 0}",
+                            if (_batchQueueProviderSession != null)
+                            {
+                                await _batchQueueProviderSession.DisposeAsync();
+                                _batchQueueProviderSession = null;
+                            }
+                            var textPasteSession = CreateAltVTextPasteSession();
+                            var textClipboard = await textPasteSession.PrepareClipboardAsync(
+                                item.TextContent ?? "",
+                                $"queueHead SetText",
                                 maxRetries: clipRetries,
-                                delayMs: clipRetryDelayMs,
-                                clipNudgeHwnd: _hwnd,
-                                canContinueBeforeEachAttempt: queueCoherence);
+                                delayMs: clipRetryDelayMs);
+                            _batchQueueProviderSession = textClipboard.ProviderSession;
+                            ok = textClipboard.Result.Success;
                             break;
                         case EntryType.Image:
                         {
@@ -1870,6 +1891,13 @@ public partial class PopupWindow : Window
         var wasFifoOrLifo = GetBatchMode() is BatchPasteQueueMode.Fifo or BatchPasteQueueMode.Lifo;
 #endif
         _batchQueue.Clear();
+#if CLIPX_CLIPBOARD
+        if (_batchQueueProviderSession != null)
+        {
+            _ = _batchQueueProviderSession.DisposeAsync();
+            _batchQueueProviderSession = null;
+        }
+#endif
         UpdateBatchOrderProperties();
         RefreshFilter(0);
         SyncBatchPasteKeyboardHook();
@@ -2667,6 +2695,11 @@ public partial class PopupWindow : Window
         if (GetBatchMode() == BatchPasteQueueMode.Off)
         {
             _batchQueue.Clear();
+            if (_batchQueueProviderSession != null)
+            {
+                _ = _batchQueueProviderSession.DisposeAsync();
+                _batchQueueProviderSession = null;
+            }
             UpdateBatchOrderProperties();
         }
 #else
