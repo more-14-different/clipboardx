@@ -599,7 +599,30 @@ public partial class PopupWindow : Window
             return (IntPtr)1;
         }
         if (ctrlHeld)
+        {
+            if (kb.vkCode is 0x4A or 0x4B or 0x48 or 0x4C)
+            {
+                Dispatcher.BeginInvoke(() =>
+                {
+                    bool shift = (Win32.GetAsyncKeyState(0x10) & 0x8000) != 0
+                        || (Win32.GetAsyncKeyState(0xA0) & 0x8000) != 0
+                        || (Win32.GetAsyncKeyState(0xA1) & 0x8000) != 0;
+
+                    int delta = 0;
+                    if (kb.vkCode == 0x4A) delta = 1;       // J
+                    else if (kb.vkCode == 0x4B) delta = -1; // K
+                    else if (kb.vkCode == 0x48) delta = -5; // H
+                    else if (kb.vkCode == 0x4C) delta = 5;  // L
+
+                    if (shift)
+                        MoveSelectionExtend(delta);
+                    else
+                        MoveSelection(delta);
+                });
+                return (IntPtr)1;
+            }
             return Win32.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
 
         switch (kb.vkCode)
         {
