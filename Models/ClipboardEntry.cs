@@ -178,24 +178,11 @@ public class ClipboardEntry : INotifyPropertyChanged
         }
     }
 
-    private string? _pinyinCacheKey;
-    private string? _pinyinSearchBlob;
-
     /// <summary>
-    /// 全拼与首字母拼接后的检索串（小写、无空格），惰性计算并随 SearchableText 失效。
+    /// 全拼与首字母拼接后的检索串（小写、无空格），用于 QuickPaste 内存检索。
+    /// 普通历史的拼音检索已下沉到 SQLite FTS5。
     /// </summary>
-    public string PinyinSearchBlob
-    {
-        get
-        {
-            var key = SearchableText;
-            if (_pinyinSearchBlob != null && string.Equals(_pinyinCacheKey, key, StringComparison.Ordinal))
-                return _pinyinSearchBlob;
-            _pinyinCacheKey = key;
-            _pinyinSearchBlob = PinyinSearchIndex.BuildBlob(key);
-            return _pinyinSearchBlob;
-        }
-    }
+    public string PinyinSearchBlob => PinyinSearchIndex.BuildBlob(SearchableText);
 
     public bool MatchesSearch(string query)
     {

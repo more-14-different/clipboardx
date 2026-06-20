@@ -37,6 +37,17 @@ internal sealed class ClipboardHistoryStore
         using var conn = new SqliteConnection(ConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
+
+        try
+        {
+            cmd.CommandText = "ALTER TABLE clipboard_history ADD COLUMN pinyin_blob TEXT;";
+            cmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            // Column likely exists, ignore
+        }
+
         cmd.CommandText =
             """
             PRAGMA journal_mode = WAL;
@@ -48,9 +59,33 @@ internal sealed class ClipboardHistoryStore
               image_w INTEGER NOT NULL DEFAULT 0,
               image_h INTEGER NOT NULL DEFAULT 0,
               file_paths_json TEXT,
-              copied_at_ms INTEGER NOT NULL
+              copied_at_ms INTEGER NOT NULL,
+              pinyin_blob TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_clipboard_history_copied ON clipboard_history(copied_at_ms DESC);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_history_fts USING fts5(
+              text_content,
+              pinyin_blob,
+              content='clipboard_history',
+              content_rowid='id',
+              tokenize='trigram'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS t_clipboard_history_ai AFTER INSERT ON clipboard_history BEGIN
+              INSERT INTO clipboard_history_fts(rowid, text_content, pinyin_blob)
+              VALUES (new.id, new.text_content, new.pinyin_blob);
+            END;
+            CREATE TRIGGER IF NOT EXISTS t_clipboard_history_ad AFTER DELETE ON clipboard_history BEGIN
+              INSERT INTO clipboard_history_fts(clipboard_history_fts, rowid, text_content, pinyin_blob)
+              VALUES ('delete', old.id, old.text_content, old.pinyin_blob);
+            END;
+            CREATE TRIGGER IF NOT EXISTS t_clipboard_history_au AFTER UPDATE ON clipboard_history BEGIN
+              INSERT INTO clipboard_history_fts(clipboard_history_fts, rowid, text_content, pinyin_blob)
+              VALUES ('delete', old.id, old.text_content, old.pinyin_blob);
+              INSERT INTO clipboard_history_fts(rowid, text_content, pinyin_blob)
+              VALUES (new.id, new.text_content, new.pinyin_blob);
+            END;
             """;
         cmd.ExecuteNonQuery();
     }
@@ -69,20 +104,72 @@ internal sealed class ClipboardHistoryStore
     /// <summary>按时间从新到旧最多读取 limit 条。</summary>
     public List<ClipboardEntry> LoadNewestFirst(int limit)
     {
+        return Search("", null, limit);
+    }
+
+    /// <summary>利用 FTS5 和类型过滤执行检索</summary>
+    public List<ClipboardEntry> Search(string query, EntryType? typeFilter, int limit)
+    {
         if (limit <= 0) return [];
         var list = new List<ClipboardEntry>(Math.Min(limit, 64));
         try
         {
             using var conn = Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText =
-                """
-                SELECT id, entry_type, text_content, image_blob, image_w, image_h, file_paths_json, copied_at_ms
-                FROM clipboard_history
-                ORDER BY copied_at_ms DESC
-                LIMIT @lim
-                """;
+            var sql = "SELECT c.id, c.entry_type, c.text_content, c.image_blob, c.image_w, c.image_h, c.file_paths_json, c.copied_at_ms FROM clipboard_history c";
+            
+            bool hasQuery = !string.IsNullOrWhiteSpace(query);
+            bool useFts = hasQuery && query.Length >= 3;
+            bool useLike = hasQuery && query.Length < 3;
+
+            if (useFts)
+            {
+                sql += " JOIN clipboard_history_fts f ON c.id = f.rowid";
+            }
+            
+            var whereClauses = new List<string>();
+            if (useFts)
+            {
+                whereClauses.Add("clipboard_history_fts MATCH @q");
+            }
+            else if (useLike)
+            {
+                whereClauses.Add("(c.text_content LIKE @likeQ OR c.pinyin_blob LIKE @likeQ)");
+            }
+            
+            if (typeFilter.HasValue)
+            {
+                if (typeFilter.Value == EntryType.Image)
+                    whereClauses.Add("(c.entry_type = 1 OR c.entry_type = 2)"); // Image or Files (we'll filter image files strictly in C#)
+                else
+                    whereClauses.Add("c.entry_type = @t");
+            }
+            
+            if (whereClauses.Count > 0)
+            {
+                sql += " WHERE " + string.Join(" AND ", whereClauses);
+            }
+            
+            sql += " ORDER BY c.copied_at_ms DESC LIMIT @lim";
+            cmd.CommandText = sql;
+            
+            if (useFts)
+            {
+                string ftsQuery = $"\"{query.Replace("\"", "\"\"")}\"";
+                cmd.Parameters.AddWithValue("@q", ftsQuery);
+            }
+            else if (useLike)
+            {
+                cmd.Parameters.AddWithValue("@likeQ", $"%{query}%");
+            }
+            
+            if (typeFilter.HasValue && typeFilter.Value != EntryType.Image)
+            {
+                cmd.Parameters.AddWithValue("@t", (int)typeFilter.Value);
+            }
+            
             cmd.Parameters.AddWithValue("@lim", limit);
+            
             using var r = cmd.ExecuteReader();
             while (r.Read())
                 list.Add(ReadEntry(r));
@@ -151,13 +238,17 @@ internal sealed class ClipboardHistoryStore
             string? filesJson = entry.Type == EntryType.Files && entry.FilePaths is { Length: > 0 }
                 ? JsonSerializer.Serialize(entry.FilePaths)
                 : null;
+                
+            string pinyinBlob = "";
+            if (entry.Type != EntryType.Image)
+                pinyinBlob = PinyinSearchIndex.BuildBlob(entry.SearchableText);
 
             using var conn = Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
                 """
-                INSERT INTO clipboard_history (entry_type, text_content, image_blob, image_w, image_h, file_paths_json, copied_at_ms)
-                VALUES (@t, @text, @blob, @w, @h, @files, @ms)
+                INSERT INTO clipboard_history (entry_type, text_content, image_blob, image_w, image_h, file_paths_json, copied_at_ms, pinyin_blob)
+                VALUES (@t, @text, @blob, @w, @h, @files, @ms, @py)
                 """;
             cmd.Parameters.AddWithValue("@t", (int)entry.Type);
             cmd.Parameters.AddWithValue("@text", (object?)entry.TextContent ?? DBNull.Value);
@@ -166,6 +257,7 @@ internal sealed class ClipboardHistoryStore
             cmd.Parameters.AddWithValue("@h", entry.ImageHeight);
             cmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@ms", ms);
+            cmd.Parameters.AddWithValue("@py", pinyinBlob);
             cmd.ExecuteNonQuery();
             cmd.CommandText = "SELECT last_insert_rowid()";
             var idObj = cmd.ExecuteScalar();
@@ -220,11 +312,13 @@ internal sealed class ClipboardHistoryStore
         if (persistedId <= 0) return;
         try
         {
+            var py = PinyinSearchIndex.BuildBlob(text);
             using var conn = Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
-                "UPDATE clipboard_history SET text_content = @t WHERE id = @id AND entry_type = @et";
+                "UPDATE clipboard_history SET text_content = @t, pinyin_blob = @py WHERE id = @id AND entry_type = @et";
             cmd.Parameters.AddWithValue("@t", text);
+            cmd.Parameters.AddWithValue("@py", py);
             cmd.Parameters.AddWithValue("@id", persistedId);
             cmd.Parameters.AddWithValue("@et", (int)EntryType.Text);
             cmd.ExecuteNonQuery();

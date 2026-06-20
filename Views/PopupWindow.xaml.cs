@@ -1278,26 +1278,40 @@ public partial class PopupWindow : Window
         _firstVisibleIndex = 0;
         var query = _searchText.Trim();
 
-        IEnumerable<ClipboardEntry> items = _allItems;
-
-        if (_quickPhraseOnly)
-            items = items.Where(i => i.IsQuickPaste);
-
+        IEnumerable<ClipboardEntry> quickPastes = _allItems.Where(i => i.IsQuickPaste);
         if (_typeFilter.HasValue)
-            items = items.Where(i => i.Type == _typeFilter.Value
-                || (_typeFilter.Value == EntryType.Image && i.IsImageFile));
-
+            quickPastes = quickPastes.Where(i => i.Type == _typeFilter.Value || (_typeFilter.Value == EntryType.Image && i.IsImageFile));
         if (!string.IsNullOrEmpty(query))
-            items = items.Where(i => i.MatchesSearch(query));
+            quickPastes = quickPastes.Where(i => i.MatchesSearch(query));
 
-        var filtered = items.ToList();
+        var filtered = new List<ClipboardEntry>(quickPastes);
+
+        if (!_quickPhraseOnly)
+        {
+            var dbItems = _historyStore.Search(query, _typeFilter, 100);
+            if (_typeFilter.HasValue && _typeFilter.Value == EntryType.Image)
+                dbItems = dbItems.Where(i => i.IsImageFile).ToList();
+
+            var allItemsDict = _allItems.Where(i => !i.IsQuickPaste && i.PersistedId.HasValue).ToDictionary(i => i.PersistedId!.Value);
+            foreach (var dbItem in dbItems)
+            {
+                if (dbItem.PersistedId.HasValue && allItemsDict.TryGetValue(dbItem.PersistedId.Value, out var existing))
+                    filtered.Add(existing);
+                else
+                {
+                    _allItems.Add(dbItem);
+                    filtered.Add(dbItem);
+                }
+            }
+        }
+
         var filteredSet = filtered.ToHashSet();
         UpdateBatchOrderProperties();
         var queuePart = _batchQueue.Where(e => filteredSet.Contains(e)).ToList();
         var qset = new HashSet<ClipboardEntry>(_batchQueue);
         var rest = filtered
             .Where(e => !qset.Contains(e))
-            .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(_searchText))
+            .OrderByDescending(i => i.IsQuickPaste && !string.IsNullOrEmpty(query))
             .ThenByDescending(i => i.CopiedAt);
 
         int idx = 1;
@@ -1321,6 +1335,10 @@ public partial class PopupWindow : Window
             ItemsList.SelectedIndex = sel;
             _mouseShiftAnchorIndex = sel;
             ItemsList.ScrollIntoView(ItemsList.SelectedItem);
+        }
+        else
+        {
+            _mouseShiftAnchorIndex = -1;
         }
     }
 
