@@ -844,6 +844,7 @@ public partial class FileDialogJumpPickerWindow : Window
 
         bool ctrl = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
         bool alt = (Win32.GetAsyncKeyState(0x12) & 0x8000) != 0;
+        if (ctrl && !alt && (vk is 0x4A or 0x4B or 0x48 or 0x4C)) return true;
         if (ctrl || alt) return false;
 
         switch (vk)
