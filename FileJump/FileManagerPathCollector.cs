@@ -262,8 +262,12 @@ internal static class FileManagerPathCollector
                         Add("Total Commander (目标)", tc2);
                     break;
                 case "ThunderRT6FormDC":
-                    if (TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var xya))
-                        Add("XYplorer", xya);
+                    if (TryGetProcessImagePath(h, exeByPid, out var xypExe) && 
+                        Path.GetFileNameWithoutExtension(xypExe).Equals("xyplorer", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var xya))
+                            Add("XYplorer", xya);
+                    }
                     break;
                 case "dopus.lister":
                     opusXml ??= TryRunDopusInfoXml(h);
@@ -345,14 +349,21 @@ internal static class FileManagerPathCollector
 
     private static string? TryGetFolderForManagerHwnd(IntPtr h)
     {
-        return Win32.GetWindowClassName(h) switch
+        var cls = Win32.GetWindowClassName(h);
+        if (cls == "TTOTAL_CMD")
+            return TryTotalCommanderPathFromClip(h, TcmCopySrcPathToClip, out var p) ? p : null;
+        if (cls == "ThunderRT6FormDC")
         {
-            "TTOTAL_CMD" => TryTotalCommanderPathFromClip(h, TcmCopySrcPathToClip, out var p) ? p : null,
-            "ThunderRT6FormDC" => TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var x) ? x : null,
-            "CabinetWClass" or "ExploreWClass" => TryGetExplorerPathForHwnd(h),
-            "dopus.lister" => ParseDopusListerPaths(TryRunDopusInfoXml(h), h).Select(t => t.path).FirstOrDefault(),
-            _ => TryGetFolderForAlternateUiManager(h)
-        };
+            if (TryGetProcessImagePath(h, null, out var xypExe) && Path.GetFileNameWithoutExtension(xypExe).Equals("xyplorer", StringComparison.OrdinalIgnoreCase))
+                return TryXyplorerPathFromClip(h, "::copytext get('path', a);", out var x) ? x : null;
+            return null;
+        }
+        if (cls == "CabinetWClass" || cls == "ExploreWClass")
+            return TryGetExplorerPathForHwnd(h);
+        if (cls == "dopus.lister")
+            return ParseDopusListerPaths(TryRunDopusInfoXml(h), h).Select(t => t.path).FirstOrDefault();
+        
+        return TryGetFolderForAlternateUiManager(h);
     }
 
     private static bool ShouldUseAlternateUiAutomation(string procBaseName)

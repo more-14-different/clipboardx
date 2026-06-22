@@ -96,6 +96,7 @@ public partial class FileDialogJumpPickerWindow : Window
     private volatile bool _hasSearchText;
     private bool _userHasResized;
     private bool _isResizing;
+    private long _loadedTick;
 
     /// <summary>列表内搜索高亮绑定用：当前检索词（Trim）。</summary>
     public static readonly DependencyProperty HighlightSearchQueryProperty = DependencyProperty.Register(
@@ -498,6 +499,7 @@ public partial class FileDialogJumpPickerWindow : Window
     private void TryDismissJumpPickerFromOutsideMouse()
     {
         if (!IsLoaded || Opacity <= 0) return;
+        if (Environment.TickCount64 - _loadedTick < 150) return;
         if (_clickReceivedByJumpPicker) return;
         if (JumpRowContextMenu.IsOpen) return;
         if (_suppressDismissForSubDialog) return;
@@ -508,13 +510,32 @@ public partial class FileDialogJumpPickerWindow : Window
     private void TryDismissJumpPickerFromForegroundChange(IntPtr newForeground)
     {
         if (!IsLoaded || Opacity <= 0) return;
+        if (Environment.TickCount64 - _loadedTick < 150) return;
         if (newForeground == _hwnd) return;
+
+        // 新前台是任何文件对话框时不关闭——跳转面板的存在意义就是服务文件对话框，
+        // 无论是否为当前 owner，都应保持面板让用户有机会选择路径。
+        if (newForeground != IntPtr.Zero)
+        {
+            var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(newForeground);
+            if (resolvedDialog != IntPtr.Zero) return;
+        }
+
+        // 贴靠模式额外保护：若新前台属于 owner 对话框的根窗口也不关
+        if (_autoForegroundStickyMode && newForeground != IntPtr.Zero && _fileDialogOwnerHwnd != IntPtr.Zero)
+        {
+            var newRoot = Win32.GetAncestor(newForeground, Win32.GA_ROOT);
+            var ownerRoot = Win32.GetAncestor(_fileDialogOwnerHwnd, Win32.GA_ROOT);
+            if (newRoot == ownerRoot) return;
+        }
+
         Win32.GetCursorPos(out var cursor);
         if (Win32.WindowFromPoint(cursor) == _hwnd) return;
         if (JumpRowContextMenu.IsOpen) return;
         if (_suppressDismissForSubDialog) return;
         Close();
     }
+
 
     private void InstallKeyboardHook()
     {
@@ -1099,6 +1120,7 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void FileDialogJumpPickerWindow_SourceInitialized(object? sender, EventArgs e)
     {
+        _loadedTick = Environment.TickCount64;
         try
         {
             var helper = new WindowInteropHelper(this);
