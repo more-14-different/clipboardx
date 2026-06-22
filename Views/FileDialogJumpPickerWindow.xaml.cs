@@ -402,6 +402,9 @@ public partial class FileDialogJumpPickerWindow : Window
         IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
         int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
+        // 只关心整个窗口本身被销毁（忽略滚动条、光标等内部对象的销毁事件，否则会导致误关面板）
+        if (idObject != Win32.OBJID_WINDOW || idChild != 0) return;
+
         var owner = s_jumpPickerOwnerDestroyOwner;
         if (owner == null) return;
         if (owner._suppressDismissForSubDialog) return;
@@ -512,6 +515,9 @@ public partial class FileDialogJumpPickerWindow : Window
         if (!IsLoaded || Opacity <= 0) return;
         if (Environment.TickCount64 - _loadedTick < 150) return;
         if (newForeground == _hwnd) return;
+        
+        // 忽略前台切换过程中的瞬间空窗口状态，避免误关
+        if (newForeground == IntPtr.Zero) return;
 
         // 新前台是任何文件对话框时不关闭——跳转面板的存在意义就是服务文件对话框，
         // 无论是否为当前 owner，都应保持面板让用户有机会选择路径。
