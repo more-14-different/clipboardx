@@ -450,8 +450,6 @@ public partial class FileDialogJumpPickerWindow : Window
         }
     }
 
-    private bool _userYieldedFocusToHost = false;
-
     private IntPtr JumpPickerMouseHookProc(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0 && _isPickerReadyForMouseHook)
@@ -459,10 +457,13 @@ public partial class FileDialogJumpPickerWindow : Window
             var msg = wParam.ToInt32();
             if (msg is Win32.WM_LBUTTONDOWN or Win32.WM_RBUTTONDOWN)
             {
-                _clickReceivedByJumpPicker = false;
-                Dispatcher.BeginInvoke(
-                    DispatcherPriority.Background,
-                    (Action)(() => HandleOutsideMouseClick()));
+                if (_settings.HideOnSameAppClick)
+                {
+                    _clickReceivedByJumpPicker = false;
+                    Dispatcher.BeginInvoke(
+                        DispatcherPriority.Background,
+                        (Action)(() => TryDismissJumpPickerFromOutsideMouse()));
+                }
             }
         }
         return Win32.CallNextHookEx(_jumpPickerMouseHook, nCode, wParam, lParam);
@@ -500,21 +501,15 @@ public partial class FileDialogJumpPickerWindow : Window
         }
     }
 
-    private void HandleOutsideMouseClick()
+    private void TryDismissJumpPickerFromOutsideMouse()
     {
         if (!IsLoaded || Opacity <= 0) return;
         if (Environment.TickCount64 - _loadedTick < 150) return;
         if (_clickReceivedByJumpPicker) return;
-
-        // 只要用户用鼠标点击了外面（宿主窗口），我们就认为用户主动交出了焦点
-        _userYieldedFocusToHost = true;
-
-        if (!_settings.HideOnSameAppClick) return;
         if (JumpRowContextMenu.IsOpen) return;
         if (_suppressDismissForSubDialog) return;
-
         // 跳转窗是 modeless 窗口，关闭只负责收起 UI，导航由 CommitNavigateKeepOpen 独立完成。
-        ShellNavigateLog.Write("filejump", "Picker Closed: HandleOutsideMouseClick");
+        ShellNavigateLog.Write("filejump", "Picker Closed: TryDismissJumpPickerFromOutsideMouse");
         Close();
     }
 
@@ -534,9 +529,8 @@ public partial class FileDialogJumpPickerWindow : Window
             var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(newForeground);
             if (resolvedDialog != IntPtr.Zero)
             {
-                // 事件响应式焦点抢回：如果用户没有主动点击过外部，且发生了焦点转移到宿主，
-                // 我们认为这是宿主程序（如 Electron）在自动初始化拉取焦点，依然尝试抢回来。
-                if (_autoForegroundStickyMode && !_userYieldedFocusToHost)
+                // 如果宿主抢走焦点，尽量抢回来，保证打字能输入到搜索框（即使用户点出了弹窗也不影响焦点霸权）
+                if (_autoForegroundStickyMode)
                 {
                     Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
                 }
@@ -652,17 +646,13 @@ public partial class FileDialogJumpPickerWindow : Window
         IntPtr fg = Win32.GetForegroundWindow();
         if (fg == IntPtr.Zero) return false;
 
-        // 【事件/响应式机制】
-        // 只要用户没有主动用鼠标点击过外部宿主窗口（即 _userYieldedFocusToHost 为 false），
-        // 那么不管系统或 Electron 怎么在底层延迟或反复把焦点切到输入框，
-        // 我们都强制拦截按键（保持面板的键盘霸权），把敲击送到我们的搜索框里！
-        if (!_userYieldedFocusToHost)
+        // 只要面板还开着，不管系统或 Electron 怎么把焦点切到输入框，
+        // 我们都强制拦截按键（保持面板的键盘霸权），把敲击送到搜索框里。
+        // 如果用户需要输入原生文件对话框，只需按下 Esc 关闭面板即可。
+        var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(fg);
+        if (resolvedDialog != IntPtr.Zero)
         {
-            var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(fg);
-            if (resolvedDialog != IntPtr.Zero)
-            {
-                return false;
-            }
+            return false;
         }
 
         uint tid = Win32.GetWindowThreadProcessId(fg, out _);
