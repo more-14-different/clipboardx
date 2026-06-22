@@ -289,8 +289,6 @@ public partial class PopupWindow : Window
     private volatile bool _isTextEntryEditPopupOpen;
     private volatile bool _isBatchMenuPopupOpen;
     private volatile bool _isContextPopupOpen;
-    private volatile bool _isShortcutHelpPopupOpen;
-    private volatile bool _isEntryPreviewPopupOpen;
 
     public PopupWindow()
     {
@@ -306,10 +304,6 @@ public partial class PopupWindow : Window
         BatchMenuPopup.Closed += (s, e) => _isBatchMenuPopupOpen = false;
         ContextPopup.Opened += (s, e) => _isContextPopupOpen = true;
         ContextPopup.Closed += (s, e) => _isContextPopupOpen = false;
-        ShortcutHelpPopup.Opened += (s, e) => _isShortcutHelpPopupOpen = true;
-        ShortcutHelpPopup.Closed += (s, e) => _isShortcutHelpPopupOpen = false;
-        EntryPreviewPopup.Opened += (s, e) => _isEntryPreviewPopupOpen = true;
-        EntryPreviewPopup.Closed += (s, e) => _isEntryPreviewPopupOpen = false;
     }
 
     public void Initialize(AppSettings settings)

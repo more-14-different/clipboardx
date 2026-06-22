@@ -25,7 +25,6 @@ public partial class ExplorerQuickFindWindow : Window
     private Brush? _highlightBrush;
     private IntPtr _hwnd;
     private bool _userHasResized;
-    private bool _isResizing;
     private AppSettings? _settings;
 
     private const string DefaultHint = "↑↓ 选择 · ←→ 翻页 · Ctrl+N 快选 · Enter 定位 · Esc 关闭";
@@ -108,11 +107,9 @@ public partial class ExplorerQuickFindWindow : Window
                 return IntPtr.Zero;
 
             case Win32.WM_ENTERSIZEMOVE:
-                _isResizing = true;
                 break;
 
             case Win32.WM_EXITSIZEMOVE:
-                _isResizing = false;
                 SaveSize();
                 break;
         }
