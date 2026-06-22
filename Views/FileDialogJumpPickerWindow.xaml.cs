@@ -413,6 +413,7 @@ public partial class FileDialogJumpPickerWindow : Window
             owner._ownerDestroyHook = IntPtr.Zero;
             owner.Dispatcher.BeginInvoke(() =>
             {
+                ShellNavigateLog.Write("filejump", "Picker Closed: StaticJumpPickerOwnerDestroyProc (No owner)");
                 try { owner.Close(); } catch { }
             });
             return;
@@ -422,6 +423,7 @@ public partial class FileDialogJumpPickerWindow : Window
             owner._ownerDestroyHook = IntPtr.Zero;
             owner.Dispatcher.BeginInvoke(() =>
             {
+                ShellNavigateLog.Write("filejump", $"Picker Closed: StaticJumpPickerOwnerDestroyProc (hwnd match: {hwnd:X})");
                 try { owner.Close(); } catch { }
             });
         }
@@ -507,6 +509,7 @@ public partial class FileDialogJumpPickerWindow : Window
         if (JumpRowContextMenu.IsOpen) return;
         if (_suppressDismissForSubDialog) return;
         // 跳转窗是 modeless 窗口，关闭只负责收起 UI，导航由 CommitNavigateKeepOpen 独立完成。
+        ShellNavigateLog.Write("filejump", "Picker Closed: TryDismissJumpPickerFromOutsideMouse");
         Close();
     }
 
@@ -551,6 +554,7 @@ public partial class FileDialogJumpPickerWindow : Window
         if (Win32.WindowFromPoint(cursor) == _hwnd) return;
         if (JumpRowContextMenu.IsOpen) return;
         if (_suppressDismissForSubDialog) return;
+        ShellNavigateLog.Write("filejump", $"Picker Closed: TryDismissJumpPickerFromForegroundChange. newForeground={newForeground:X}");
         Close();
     }
 
@@ -1323,6 +1327,22 @@ public partial class FileDialogJumpPickerWindow : Window
         if (!_dockBesideDialog || _hwnd == IntPtr.Zero) return;
         if (!TryReadDockOwnerRect(out var ownerRect))
         {
+            // 如果窗口句柄已失效，直接关闭
+            if (_fileDialogOwnerHwnd == IntPtr.Zero || !Win32.IsWindow(_fileDialogOwnerHwnd))
+            {
+                ShellNavigateLog.Write("filejump", "Picker Closed: DockFollowTick (Owner window destroyed)");
+                Close();
+                return;
+            }
+
+            // 如果窗口还在但不可见（可能宿主是 Electron/VSCode，对话框还在初始化或被隐藏）
+            // 给予 2 秒的宽限期，避免对话框显示太慢导致面板直接被关掉。
+            if (Environment.TickCount64 - _loadedTick < 2000)
+            {
+                return; // 暂不关闭，等待它可见
+            }
+
+            ShellNavigateLog.Write("filejump", "Picker Closed: DockFollowTick (Owner window invisible after grace period)");
             Close();
             return;
         }
