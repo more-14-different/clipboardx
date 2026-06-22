@@ -518,14 +518,26 @@ public partial class FileDialogJumpPickerWindow : Window
         if (newForeground != IntPtr.Zero)
         {
             var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(newForeground);
-            if (resolvedDialog != IntPtr.Zero) return;
+            if (resolvedDialog != IntPtr.Zero)
+            {
+                // 如果是贴靠模式（自动弹出），且面板刚刚弹出不久（例如2秒内），
+                // 说明宿主（如 Electron/VSCode）的文件对话框是延迟显示的，此时对话框显式抢走了面板的焦点。
+                // 我们需要把焦点抢回来，以便用户能直接在面板里打字搜索。
+                if (_autoForegroundStickyMode && Environment.TickCount64 - _loadedTick < 2000)
+                {
+                    Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
+                }
+                return;
+            }
         }
 
-        // 贴靠模式额外保护：若新前台属于 owner 对话框的根窗口也不关
+        // 贴靠模式额外保护：若新前台属于 owner 对话框的根窗口也不关。
+        // 注意：必须用 GA_ROOTOWNER（3），因为宿主主窗（如 Antigravity）与它弹出的模态对话框属于同一 Owner 树，
+        // 如果只用 GA_ROOT，当点击主窗时会误判而导致面板退出（Issue #2 实际上被遮住了或退出了）。
         if (_autoForegroundStickyMode && newForeground != IntPtr.Zero && _fileDialogOwnerHwnd != IntPtr.Zero)
         {
-            var newRoot = Win32.GetAncestor(newForeground, Win32.GA_ROOT);
-            var ownerRoot = Win32.GetAncestor(_fileDialogOwnerHwnd, Win32.GA_ROOT);
+            var newRoot = Win32.GetAncestor(newForeground, 3 /* GA_ROOTOWNER */);
+            var ownerRoot = Win32.GetAncestor(_fileDialogOwnerHwnd, 3 /* GA_ROOTOWNER */);
             if (newRoot == ownerRoot) return;
         }
 
