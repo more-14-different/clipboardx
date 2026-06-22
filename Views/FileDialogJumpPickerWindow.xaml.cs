@@ -529,10 +529,10 @@ public partial class FileDialogJumpPickerWindow : Window
             var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(newForeground);
             if (resolvedDialog != IntPtr.Zero)
             {
-                // 如果是贴靠模式（自动弹出），且面板刚刚弹出不久（例如2秒内），
+                // 如果是贴靠模式（自动弹出），且面板刚刚弹出不久（例如5秒内），
                 // 说明宿主（如 Electron/VSCode）的文件对话框是延迟显示的，此时对话框显式抢走了面板的焦点。
                 // 我们需要把焦点抢回来，以便用户能直接在面板里打字搜索。
-                if (_autoForegroundStickyMode && Environment.TickCount64 - _loadedTick < 2000)
+                if (_autoForegroundStickyMode && Environment.TickCount64 - _loadedTick < 5000)
                 {
                     Dispatcher.BeginInvoke(TryStealFocusForPicker, DispatcherPriority.Input);
                 }
@@ -647,6 +647,19 @@ public partial class FileDialogJumpPickerWindow : Window
         if (_hwnd == IntPtr.Zero) return false;
         IntPtr fg = Win32.GetForegroundWindow();
         if (fg == IntPtr.Zero) return false;
+
+        // 如果是自动贴靠模式（自动弹出），在弹出的前 5 秒内，
+        // 即使焦点被系统文件对话框或 Electron 的输入框抢走，
+        // 我们也强制拦截按键（因为用户大概率此时是想在跳转面板里打字）。
+        if (_autoForegroundStickyMode && Environment.TickCount64 - _loadedTick < 5000)
+        {
+            var resolvedDialog = FileDialogJumpHelper.ResolveFileDialogHwndFromWindowOrAncestor(fg);
+            if (resolvedDialog != IntPtr.Zero)
+            {
+                return false;
+            }
+        }
+
         uint tid = Win32.GetWindowThreadProcessId(fg, out _);
         var gti = new Win32.GUITHREADINFO { cbSize = Marshal.SizeOf<Win32.GUITHREADINFO>() };
         if (!Win32.GetGUIThreadInfo(tid, ref gti) || gti.hwndFocus == IntPtr.Zero)
