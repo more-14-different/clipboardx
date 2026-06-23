@@ -1696,7 +1696,7 @@ public partial class FileDialogJumpPickerWindow : Window
         CtxAddFavorite.Visibility = row is { IsFavorite: false } ? Visibility.Visible : Visibility.Collapsed;
         CtxRemoveFavorite.Visibility = row is { IsFavorite: true } ? Visibility.Visible : Visibility.Collapsed;
         CtxEditPhrase.Visibility = row is { IsFavorite: true } ? Visibility.Visible : Visibility.Collapsed;
-        CtxRemoveRecentFolder.Visibility = row is { IsFavorite: false } && row.SourceLabel.StartsWith("常用路径") ? Visibility.Visible : Visibility.Collapsed;
+        CtxRemoveRecentFolder.Visibility = row is { IsFavorite: false } && row.SourceLabel.StartsWith("常用") ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CtxAddFavorite_Click(object sender, RoutedEventArgs e)
