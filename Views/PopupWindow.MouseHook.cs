@@ -271,14 +271,23 @@ public partial class PopupWindow : Window
             {
                 if (_hideOnSameAppClick)
                 {
-                    _clickReceivedByPopup = false;
-                    Dispatcher.BeginInvoke(
-                        System.Windows.Threading.DispatcherPriority.Background, () =>
-                        {
-                            if (_isPopupVisible && !_clickReceivedByPopup
-                                && !_isContextPopupOpen && !_isPhraseEditPopupOpen && !_isTextEntryEditPopupOpen)
-                                HidePopup();
-                        });
+                    var clickHwnd = Win32.WindowFromPoint(info.pt);
+                    var rootHwnd = clickHwnd != IntPtr.Zero ? Win32.GetAncestor(clickHwnd, Win32.GA_ROOT) : IntPtr.Zero;
+                    if (rootHwnd == _hwnd)
+                    {
+                        _clickReceivedByPopup = true;
+                    }
+                    else
+                    {
+                        _clickReceivedByPopup = false;
+                        Dispatcher.BeginInvoke(
+                            System.Windows.Threading.DispatcherPriority.Background, () =>
+                            {
+                                if (_isPopupVisible && !_clickReceivedByPopup
+                                    && !_isContextPopupOpen && !_isPhraseEditPopupOpen && !_isTextEntryEditPopupOpen)
+                                    HidePopup();
+                            });
+                    }
                 }
             }
         }

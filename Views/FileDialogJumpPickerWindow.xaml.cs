@@ -459,10 +459,20 @@ public partial class FileDialogJumpPickerWindow : Window
             {
                 if (_settings.HideOnSameAppClick)
                 {
-                    _clickReceivedByJumpPicker = false;
-                    Dispatcher.BeginInvoke(
-                        DispatcherPriority.Background,
-                        (Action)(() => TryDismissJumpPickerFromOutsideMouse()));
+                    var info = Marshal.PtrToStructure<Win32.MSLLHOOKSTRUCT>(lParam);
+                    var clickHwnd = Win32.WindowFromPoint(info.pt);
+                    var rootHwnd = clickHwnd != IntPtr.Zero ? Win32.GetAncestor(clickHwnd, Win32.GA_ROOT) : IntPtr.Zero;
+                    if (rootHwnd == _hwnd)
+                    {
+                        _clickReceivedByJumpPicker = true;
+                    }
+                    else
+                    {
+                        _clickReceivedByJumpPicker = false;
+                        Dispatcher.BeginInvoke(
+                            DispatcherPriority.Background,
+                            (Action)(() => TryDismissJumpPickerFromOutsideMouse()));
+                    }
                 }
             }
         }
@@ -1158,8 +1168,9 @@ public partial class FileDialogJumpPickerWindow : Window
             helper.EnsureHandle();
             _hwnd = helper.Handle;
             // 粘性贴靠模式若设为文件对话框的 Owned 窗口，系统常把前台/键盘留在宿主对话框，SetForeground 难以生效；本窗已 Topmost。
-            if (_fileDialogOwnerHwnd != IntPtr.Zero && !_autoForegroundStickyMode)
-                helper.Owner = _fileDialogOwnerHwnd;
+            // 实际上无论是自动贴靠还是手动唤出，跨进程设置 Owner 都会导致 WPF 失去焦点/MouseUp事件丢失，因此统一不设 Owner。
+            // if (_fileDialogOwnerHwnd != IntPtr.Zero && !_autoForegroundStickyMode)
+            //     helper.Owner = _fileDialogOwnerHwnd;
 
             HwndSource.FromHwnd(_hwnd)?.AddHook(JumpPickerWndProc);
         }
