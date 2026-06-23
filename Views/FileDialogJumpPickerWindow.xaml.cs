@@ -743,6 +743,13 @@ public partial class FileDialogJumpPickerWindow : Window
                 MoveSelection(delta);
                 return true;
             }
+            else if (vk == Win32.VK_RETURN)
+            {
+                FlushPendingSearchRefresh();
+                if (ItemsList.SelectedItem is FileJumpPickerRow r)
+                    CommitSelection(r.Path, pasteText: true);
+                return true;
+            }
         }
         if (ctrl || alt)
             return false;
@@ -862,7 +869,7 @@ public partial class FileDialogJumpPickerWindow : Window
 
         bool ctrl = (Win32.GetAsyncKeyState(0x11) & 0x8000) != 0;
         bool alt = (Win32.GetAsyncKeyState(0x12) & 0x8000) != 0;
-        if (ctrl && !alt && (vk is 0x4A or 0x4B or 0x48 or 0x4C)) return true;
+        if (ctrl && !alt && (vk is 0x4A or 0x4B or 0x48 or 0x4C or Win32.VK_RETURN)) return true;
         if (ctrl || alt) return false;
 
         switch (vk)
@@ -1651,7 +1658,8 @@ public partial class FileDialogJumpPickerWindow : Window
             && lbi.DataContext is FileJumpPickerRow row)
         {
             ItemsList.SelectedItem = row;
-            CommitSelection(row.Path);
+            bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            CommitSelection(row.Path, pasteText: ctrl);
         }
     }
 
@@ -1932,10 +1940,10 @@ public partial class FileDialogJumpPickerWindow : Window
         AssignVisibleQuickIndices(newFirstVisible);
     }
 
-    private void CommitSelection(string path)
+    private void CommitSelection(string path, bool pasteText = false)
     {
         // 选中即跳转，但跳转列表不自动关闭：由 Esc / 点击列表外 / 文件对话框关闭 等显式动作收起。
-        CommitNavigateKeepOpen(path);
+        CommitNavigateKeepOpen(path, pasteText);
     }
 
     /// <summary>
@@ -2054,11 +2062,53 @@ public partial class FileDialogJumpPickerWindow : Window
     }
 
     /// <summary>粘性自动模式：只切换文件对话框目录并刷新列表，不关闭窗口。</summary>
-    private void CommitNavigateKeepOpen(string path)
+    private void CommitNavigateKeepOpen(string path, bool pasteText = false)
     {
         unchecked { _commitNavigateKeepOpenGen++; }
         var gen = _commitNavigateKeepOpenGen;
         var dlgHwnd = _fileDialogOwnerHwnd;
+
+        if (pasteText)
+        {
+            Close();
+            Task.Run(async () =>
+            {
+                await Task.Delay(40);
+                for (int i = 0; i < 5; i++)
+                {
+                    try
+                    {
+                        System.Windows.Application.Current.Dispatcher.Invoke(() => System.Windows.Clipboard.SetText(path));
+                        break;
+                    }
+                    catch { await Task.Delay(20); }
+                }
+
+                await Task.Delay(30);
+
+                var lShift = (Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0;
+                var rShift = (Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0;
+                var lCtrl = (Win32.GetAsyncKeyState(Win32.VK_LCONTROL) & 0x8000) != 0;
+                var rCtrl = (Win32.GetAsyncKeyState(Win32.VK_RCONTROL) & 0x8000) != 0;
+                var lAlt = (Win32.GetAsyncKeyState(Win32.VK_LMENU) & 0x8000) != 0;
+                var rAlt = (Win32.GetAsyncKeyState(Win32.VK_RMENU) & 0x8000) != 0;
+
+                if (lShift) Win32.keybd_event((byte)Win32.VK_LSHIFT, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+                if (rShift) Win32.keybd_event((byte)Win32.VK_RSHIFT, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+                if (lCtrl) Win32.keybd_event((byte)Win32.VK_LCONTROL, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+                if (rCtrl) Win32.keybd_event((byte)Win32.VK_RCONTROL, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+                if (lAlt) Win32.keybd_event((byte)Win32.VK_LMENU, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+                if (rAlt) Win32.keybd_event((byte)Win32.VK_RMENU, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+
+                await Task.Delay(1);
+
+                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, IntPtr.Zero);
+                Win32.keybd_event(0x56, 0, 0, IntPtr.Zero); // V
+                Win32.keybd_event(0x56, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+            });
+            return;
+        }
 
         // 全局模式（无文件对话框）：直接在资源管理器中打开文件夹
         if (dlgHwnd == IntPtr.Zero)

@@ -5493,6 +5493,32 @@ public partial class PopupWindow : Window
             SendCtrlVPaste,
             SendShiftInsertPaste);
 
+    internal async Task FileJumpStandalonePasteAsync(string text, IntPtr targetWindow)
+    {
+        var session = new AltVTextPasteSession(
+            targetWindow,
+            EnableExternalClipboardProviderForAltV,
+            _appSettings?.PasteSimulationMode ?? PasteSimulationModes.CtrlV,
+            TrySetTextLocallyAsync,
+            txt => TryDirectInsertTextToFocusedEditControl(targetWindow, txt),
+            TryDirectTypeTextToTarget,
+            SendCtrlVPaste,
+            SendShiftInsertPaste);
+
+        var clipboardRes = await session.PrepareClipboardAsync(text, "filejump_paste", 5, 20);
+        if (clipboardRes.Result.Success)
+        {
+            bool ok = session.TryInsertWithoutClipboard(text, "filejump_paste", out _);
+            if (!ok)
+            {
+                var dispatch = session.DispatchPaste();
+                session.LogSuccessPath("filejump_paste", "clipboardProvider", dispatch);
+                if (clipboardRes.ProviderSession != null)
+                    await session.AwaitProviderSettleAsync(noSegmentDelays: false);
+            }
+        }
+    }
+
     private async Task<AltVTextPasteSession.ClipboardWriteResult> TrySetTextLocallyAsync(
         string text,
         int maxRetries,
@@ -5797,7 +5823,7 @@ public partial class PopupWindow : Window
     // 1) Insert 必须按扩展键发送；
     // 2) 若呼出面板时 Ctrl/Alt/Win 仍处于按下态，最终组合键会被污染。
     // 因此这里在同一批 SendInput 中先释放当前真实按下的修饰键，再发送标准的 Shift+Insert。
-    private static void SendShiftInsertPaste()
+    internal static void SendShiftInsertPaste()
     {
         var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
         var altHeld = (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0;
@@ -5828,7 +5854,7 @@ public partial class PopupWindow : Window
     /// <summary>先释放可能干扰的修饰键，再发送 Ctrl+V（避免呼出面板时 Shift 等仍按下导致「无格式粘贴」等）。
     /// 两次 SendInput 拆分提交：第一次释放真实按下的修饰键，让目标处理一帧；第二次再发 Ctrl+V。
     /// 历史上整批一次 SendInput 偶发出现目标先看到 V Down 再看到 Ctrl Down，进而把 V 当成普通字符输入（用户看到「v」字符）。</summary>
-    private static void SendCtrlVPaste()
+    internal static void SendCtrlVPaste()
     {
         var lShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0;
         var rShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0;
