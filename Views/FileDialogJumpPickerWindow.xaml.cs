@@ -1761,8 +1761,6 @@ public partial class FileDialogJumpPickerWindow : Window
         _settings.FolderFavorites.RemoveAll(f =>
             string.Equals(f.Path, row.Path, StringComparison.OrdinalIgnoreCase));
         _settings.Save();
-        _collectorSnapshot.RemoveAll(c =>
-            string.Equals(c.Path, row.Path, StringComparison.OrdinalIgnoreCase));
         BuildMasterList();
         RefreshFilter();
     }
