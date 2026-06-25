@@ -3809,7 +3809,8 @@ public partial class PopupWindow : Window
         var picker = new FileDialogJumpPickerWindow(
             candidates, 0, pos.X, pos.Y, _appSettings, IntPtr.Zero,
             autoForegroundStickyMode: false,
-            standaloneTargetHwnd: standaloneTargetHwnd);
+            standaloneTargetHwnd: standaloneTargetHwnd,
+            standalonePasteCallback: FileJumpStandalonePasteAsync);
         _activeFileJumpPicker = picker;
         picker.Closed += (_, _) =>
         {

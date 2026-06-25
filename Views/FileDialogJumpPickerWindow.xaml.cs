@@ -147,6 +147,8 @@ public partial class FileDialogJumpPickerWindow : Window
                 : $"filejump.perf {eventName} elapsedMs={elapsedMs} {detail}");
     }
 
+    private readonly Func<string, IntPtr, Task>? _standalonePasteCallback;
+
     public FileDialogJumpPickerWindow(
         IReadOnlyList<FileJumpCandidate> collectorItems,
         int preferSelectedIndex,
@@ -155,7 +157,8 @@ public partial class FileDialogJumpPickerWindow : Window
         AppSettings settings,
         IntPtr fileDialogOwnerHwnd,
         bool autoForegroundStickyMode = false,
-        IntPtr standaloneTargetHwnd = default)
+        IntPtr standaloneTargetHwnd = default,
+        Func<string, IntPtr, Task>? standalonePasteCallback = null)
     {
         _fileDialogOwnerHwnd = fileDialogOwnerHwnd;
         _mouseScreenX = mouseScreenX;
@@ -164,6 +167,7 @@ public partial class FileDialogJumpPickerWindow : Window
         _autoForegroundStickyMode = autoForegroundStickyMode;
         _isStandaloneMode = standaloneTargetHwnd != IntPtr.Zero;
         _standaloneTargetHwnd = standaloneTargetHwnd;
+        _standalonePasteCallback = standalonePasteCallback;
         // 「对话框打开时自动弹出列表」开启时所有跳转列表（含 Ctrl+G）强制贴对话框；
         // 关闭时按用户「跟随对话框/鼠标」。autoForegroundStickyMode 自身就是自动弹出，必须贴。
         _dockBesideDialog = fileDialogOwnerHwnd != IntPtr.Zero
@@ -2125,7 +2129,14 @@ public partial class FileDialogJumpPickerWindow : Window
             // 1. 隐藏面板，让 UI 立即恢复响应，消除鼠标沙漏卡顿
             Hide();
 
-            // 2. 将易阻塞的剪贴板写入和粘贴转移到后台 STA 线程
+            if (_standalonePasteCallback != null && _standaloneTargetHwnd != IntPtr.Zero)
+            {
+                _ = _standalonePasteCallback(path, _standaloneTargetHwnd);
+                Dispatcher.BeginInvoke(new Action(Close), System.Windows.Threading.DispatcherPriority.Background);
+                return;
+            }
+
+            // 2. 将易阻塞的剪贴板写入和粘贴转移到后台 STA 线程 (Fallback)
             var pasteThread = new System.Threading.Thread(() =>
             {
                 bool ok = false;
