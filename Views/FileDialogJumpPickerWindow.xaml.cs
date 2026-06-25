@@ -2136,24 +2136,17 @@ public partial class FileDialogJumpPickerWindow : Window
                 return;
             }
 
-            // 2. 将易阻塞的剪贴板写入和粘贴转移到后台 STA 线程 (Fallback)
+            // 2. 将易阻塞的剪贴板写入转移到后台 STA 线程 (Fallback)
             var pasteThread = new System.Threading.Thread(() =>
             {
-                bool ok = false;
                 for (int i = 0; i < 5; i++)
                 {
                     try
                     {
                         System.Windows.Clipboard.SetText(path);
-                        ok = true;
                         break;
                     }
                     catch { System.Threading.Thread.Sleep(40); }
-                }
-
-                if (ok)
-                {
-                    PopupWindow.SendCtrlVPaste();
                 }
 
                 Dispatcher.BeginInvoke(new Action(Close), System.Windows.Threading.DispatcherPriority.Background);
