@@ -578,6 +578,10 @@ internal static class Win32
     [DllImport("shell32.dll")]
     public static extern void ILFree(IntPtr pidl);
 
+    /// <summary>
+    /// 阻塞等待直到用户物理释放所有的修饰键（Ctrl、Alt、Shift、Win），或到达给定的超时时间。
+    /// 用于防止用户的真实按键状态污染模拟输入（如 SendInput 发送的 Ctrl+V 被真实按键冲掉）。
+    /// </summary>
     public static void WaitForModifiersReleased(int timeoutMs)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();

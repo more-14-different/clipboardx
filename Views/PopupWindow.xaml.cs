@@ -5825,30 +5825,17 @@ public partial class PopupWindow : Window
             SendCtrlVPaste();
     }
 
-    // Shift+Insert 是系统级粘贴，但 Excel 对模拟输入更挑：
+    // Shift+Insert 是系统级粘贴，但 Excel 等软件对模拟输入更挑：
     // 1) Insert 必须按扩展键发送；
     // 2) 若呼出面板时 Ctrl/Alt/Win 仍处于按下态，最终组合键会被污染。
-    // 因此这里在同一批 SendInput 中先释放当前真实按下的修饰键，再发送标准的 Shift+Insert。
+    // 因此这里先等待用户物理松开所有修饰键，然后强制清除遗留的修饰键状态，再发送标准的 Shift+Insert。
     internal static void SendShiftInsertPaste()
     {
         // 增加等待物理按键释放，避免系统级按键状态冲突导致模拟按键失效（例如出现只输入 v 的情况）
         Win32.WaitForModifiersReleased(500);
 
-        var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
-        var altHeld = (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0;
-        var lWinHeld = (Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0;
-        var rWinHeld = (Win32.GetAsyncKeyState(Win32.VK_RWIN) & 0x8000) != 0;
-
-        var releaseCount = (ctrlHeld ? 1 : 0) + (altHeld ? 1 : 0) + (lWinHeld ? 1 : 0) + (rWinHeld ? 1 : 0);
-        if (releaseCount > 0)
+        if (ReleaseHeldModifiers())
         {
-            var release = new Win32.INPUT[releaseCount];
-            var r = 0;
-            if (ctrlHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_CONTROL; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (altHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_MENU; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (lWinHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_LWIN; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (rWinHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_RWIN; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            Win32.SendInput((uint)release.Length, release, Marshal.SizeOf<Win32.INPUT>());
             Thread.Sleep(1);
         }
 
@@ -5860,34 +5847,16 @@ public partial class PopupWindow : Window
         Win32.SendInput((uint)combo.Length, combo, Marshal.SizeOf<Win32.INPUT>());
     }
 
-    /// <summary>先释放可能干扰的修饰键，再发送 Ctrl+V（避免呼出面板时 Shift 等仍按下导致「无格式粘贴」等）。
-    /// 两次 SendInput 拆分提交：第一次释放真实按下的修饰键，让目标处理一帧；第二次再发 Ctrl+V。
-    /// 历史上整批一次 SendInput 偶发出现目标先看到 V Down 再看到 Ctrl Down，进而把 V 当成普通字符输入（用户看到「v」字符）。</summary>
+    /// <summary>先等待用户物理松开所有修饰键，然后强制释放可能遗留的修饰键状态，再发送 Ctrl+V。
+    /// 因为如果物理按键仍被按下，仅靠模拟发送 KEYUP 往往会被系统状态覆盖，导致目标窗口按键识别错乱（例如漏掉 Ctrl 只输入 v 字符）。
+    /// 释放遗留状态与发送真实组合键拆分两次 SendInput 提交，中间强制切换线程上下文，确保目标窗口消息队列有序响应。</summary>
     internal static void SendCtrlVPaste()
     {
         // 增加等待物理按键释放，避免系统级按键状态冲突导致模拟按键失效（例如出现只输入 v 的情况）
         Win32.WaitForModifiersReleased(500);
 
-        var lShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0;
-        var rShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0;
-        var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
-        var altHeld = (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0;
-        var lWinHeld = (Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0;
-        var rWinHeld = (Win32.GetAsyncKeyState(Win32.VK_RWIN) & 0x8000) != 0;
-
-        var releaseCount = (lShiftHeld ? 1 : 0) + (rShiftHeld ? 1 : 0) + (ctrlHeld ? 1 : 0)
-                           + (altHeld ? 1 : 0) + (lWinHeld ? 1 : 0) + (rWinHeld ? 1 : 0);
-        if (releaseCount > 0)
+        if (ReleaseHeldModifiers())
         {
-            var release = new Win32.INPUT[releaseCount];
-            var r = 0;
-            if (lShiftHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_LSHIFT; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (rShiftHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_RSHIFT; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (ctrlHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_CONTROL; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (altHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_MENU; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (lWinHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_LWIN; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            if (rWinHeld) { release[r].type = Win32.INPUT_KEYBOARD; release[r].u.ki.wVk = Win32.VK_RWIN; release[r].u.ki.dwFlags = Win32.KEYEVENTF_KEYUP; r++; }
-            Win32.SendInput((uint)release.Length, release, Marshal.SizeOf<Win32.INPUT>());
             // 让目标线程处理一帧释放事件，再注入组合键。极短让步（Sleep 0 即可触发线程切换）。
             Thread.Sleep(1);
         }
@@ -5906,8 +5875,10 @@ public partial class PopupWindow : Window
         if (string.IsNullOrEmpty(text))
             return false;
 
-        ReleaseHeldModifiersForDirectText();
-        Thread.Sleep(1);
+        if (ReleaseHeldModifiers())
+        {
+            Thread.Sleep(1);
+        }
 
         const int chunkSize = 256;
         for (var i = 0; i < text.Length; i += chunkSize)
@@ -6118,7 +6089,7 @@ public partial class PopupWindow : Window
                || cls.StartsWith("WindowsForms10.EDIT", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void ReleaseHeldModifiersForDirectText()
+    private static bool ReleaseHeldModifiers()
     {
         var heldKeys = new List<ushort>(6);
         if ((Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0) heldKeys.Add(Win32.VK_LSHIFT);
@@ -6129,7 +6100,7 @@ public partial class PopupWindow : Window
         if ((Win32.GetAsyncKeyState(Win32.VK_RWIN) & 0x8000) != 0) heldKeys.Add(Win32.VK_RWIN);
 
         if (heldKeys.Count == 0)
-            return;
+            return false;
 
         var release = new Win32.INPUT[heldKeys.Count];
         for (var i = 0; i < heldKeys.Count; i++)
@@ -6140,6 +6111,7 @@ public partial class PopupWindow : Window
         }
 
         Win32.SendInput((uint)release.Length, release, Marshal.SizeOf<Win32.INPUT>());
+        return true;
     }
 
     private static bool SendUnicodeString(string text)

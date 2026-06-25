@@ -1994,7 +1994,7 @@ public partial class FileDialogJumpPickerWindow : Window
     private void CommitSelection(string path, bool pasteText = false)
     {
         // 所有模式统一走 CommitNavigateKeepOpen：
-        //   pasteText=true（Ctrl+Enter/Ctrl+Click）→ 写剪贴板 + SendCtrlVPaste（复用主面板逻辑）
+        //   pasteText=true（Ctrl+Enter/Ctrl+Click）→ 独立面板模式通过 callback 复用主面板完整粘贴，跟随文件对话框模式仅纯净复制到剪贴板
         //   pasteText=false + dlgHwnd==0（全局模式）→ 打开文件夹
         //   pasteText=false + dlgHwnd!=0（文件对话框模式）→ 导航到目标路径
         CommitNavigateKeepOpen(path, pasteText);
