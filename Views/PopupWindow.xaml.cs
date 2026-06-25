@@ -5508,16 +5508,20 @@ public partial class PopupWindow : Window
             SendShiftInsertPaste);
 
         var clipboardRes = await session.PrepareClipboardAsync(text, "filejump_paste", 5, 20);
-        if (clipboardRes.Result.Success)
+        bool clipboardOk = clipboardRes.Result.Success;
+        bool usedNonClipboardTextInsert = false;
+
+        if (!clipboardOk)
         {
-            bool ok = session.TryInsertWithoutClipboard(text, "filejump_paste", out _);
-            if (!ok)
-            {
-                var dispatch = session.DispatchPaste();
-                session.LogSuccessPath("filejump_paste", "clipboardProvider", dispatch);
-                if (clipboardRes.ProviderSession != null)
-                    await session.AwaitProviderSettleAsync(noSegmentDelays: false);
-            }
+            clipboardOk = session.TryInsertWithoutClipboard(text, "filejump_paste", out usedNonClipboardTextInsert);
+        }
+
+        if (clipboardOk && !usedNonClipboardTextInsert)
+        {
+            var dispatch = session.DispatchPaste();
+            session.LogSuccessPath("filejump_paste", "clipboardProvider", dispatch);
+            if (clipboardRes.ProviderSession != null)
+                await session.AwaitProviderSettleAsync(noSegmentDelays: false);
         }
     }
 
