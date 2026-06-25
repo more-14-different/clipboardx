@@ -145,7 +145,8 @@ public partial class FileDialogJumpPickerWindow : Window
         int mouseScreenY,
         AppSettings settings,
         IntPtr fileDialogOwnerHwnd,
-        bool autoForegroundStickyMode = false)
+        bool autoForegroundStickyMode = false,
+        IntPtr standaloneTargetHwnd = default)
     {
         _fileDialogOwnerHwnd = fileDialogOwnerHwnd;
         _mouseScreenX = mouseScreenX;
@@ -2070,43 +2071,20 @@ public partial class FileDialogJumpPickerWindow : Window
 
         if (pasteText)
         {
-            Close();
-            Task.Run(async () =>
-            {
-                await Task.Delay(40);
-                for (int i = 0; i < 5; i++)
-                {
-                    try
-                    {
-                        System.Windows.Application.Current.Dispatcher.Invoke(() => System.Windows.Clipboard.SetText(path));
-                        break;
-                    }
-                    catch { await Task.Delay(20); }
-                }
+            // 与主面板完全一致的极速粘贴流程（面板已设置为 WS_EX_NOACTIVATE 不抢焦点）
+            try { System.Windows.Clipboard.SetText(path); }
+            catch { Close(); return; }
 
-                await Task.Delay(30);
+            _suppressJumpHook = true;
 
-                var lShift = (Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0;
-                var rShift = (Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0;
-                var lCtrl = (Win32.GetAsyncKeyState(Win32.VK_LCONTROL) & 0x8000) != 0;
-                var rCtrl = (Win32.GetAsyncKeyState(Win32.VK_RCONTROL) & 0x8000) != 0;
-                var lAlt = (Win32.GetAsyncKeyState(Win32.VK_LMENU) & 0x8000) != 0;
-                var rAlt = (Win32.GetAsyncKeyState(Win32.VK_RMENU) & 0x8000) != 0;
+            // 隐藏面板
+            Hide();
 
-                if (lShift) Win32.keybd_event((byte)Win32.VK_LSHIFT, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-                if (rShift) Win32.keybd_event((byte)Win32.VK_RSHIFT, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-                if (lCtrl) Win32.keybd_event((byte)Win32.VK_LCONTROL, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-                if (rCtrl) Win32.keybd_event((byte)Win32.VK_RCONTROL, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-                if (lAlt) Win32.keybd_event((byte)Win32.VK_LMENU, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-                if (rAlt) Win32.keybd_event((byte)Win32.VK_RMENU, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
+            // 发送粘贴（目标窗口焦点一直没变，立即发送即可）
+            PopupWindow.SendCtrlVPaste();
 
-                await Task.Delay(1);
-
-                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, IntPtr.Zero);
-                Win32.keybd_event(0x56, 0, 0, IntPtr.Zero); // V
-                Win32.keybd_event(0x56, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, Win32.KEYEVENTF_KEYUP, IntPtr.Zero);
-            });
+            // 异步关闭窗口
+            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
             return;
         }
 

@@ -3690,7 +3690,7 @@ public partial class PopupWindow : Window
         var dialogHwnd = ResolveFileJumpTargetHwndInternal(fgNow);
         if (dialogHwnd == IntPtr.Zero)
         {
-            OpenGlobalFavoritesPicker();
+            OpenGlobalFavoritesPicker(fgNow);
             return;
         }
 
@@ -3773,7 +3773,7 @@ public partial class PopupWindow : Window
     }
 
     /// <summary>全局 Ctrl+G：非文件对话框界面打开收藏/常用文件夹快速选择窗口。</summary>
-    private void OpenGlobalFavoritesPicker()
+    private void OpenGlobalFavoritesPicker(IntPtr standaloneTargetHwnd)
     {
         if (_appSettings == null) return;
         if (_activeFileJumpPicker != null || _fileJumpPickerOpenInProgress) return;
@@ -3808,7 +3808,8 @@ public partial class PopupWindow : Window
         Win32.GetCursorPos(out var pos);
         var picker = new FileDialogJumpPickerWindow(
             candidates, 0, pos.X, pos.Y, _appSettings, IntPtr.Zero,
-            autoForegroundStickyMode: false);
+            autoForegroundStickyMode: false,
+            standaloneTargetHwnd: standaloneTargetHwnd);
         _activeFileJumpPicker = picker;
         picker.Closed += (_, _) =>
         {
