@@ -577,4 +577,23 @@ internal static class Win32
 
     [DllImport("shell32.dll")]
     public static extern void ILFree(IntPtr pidl);
+
+    public static void WaitForModifiersReleased(int timeoutMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            var lShiftHeld = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
+            var rShiftHeld = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
+            var ctrlHeld = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            var altHeld = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+            var lWinHeld = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
+            var rWinHeld = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+
+            if (!lShiftHeld && !rShiftHeld && !ctrlHeld && !altHeld && !lWinHeld && !rWinHeld)
+                break;
+
+            System.Threading.Thread.Sleep(15);
+        }
+    }
 }

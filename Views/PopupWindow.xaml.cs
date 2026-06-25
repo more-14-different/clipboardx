@@ -5831,6 +5831,9 @@ public partial class PopupWindow : Window
     // 因此这里在同一批 SendInput 中先释放当前真实按下的修饰键，再发送标准的 Shift+Insert。
     internal static void SendShiftInsertPaste()
     {
+        // 增加等待物理按键释放，避免系统级按键状态冲突导致模拟按键失效（例如出现只输入 v 的情况）
+        Win32.WaitForModifiersReleased(500);
+
         var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
         var altHeld = (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0;
         var lWinHeld = (Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0;
@@ -5862,6 +5865,9 @@ public partial class PopupWindow : Window
     /// 历史上整批一次 SendInput 偶发出现目标先看到 V Down 再看到 Ctrl Down，进而把 V 当成普通字符输入（用户看到「v」字符）。</summary>
     internal static void SendCtrlVPaste()
     {
+        // 增加等待物理按键释放，避免系统级按键状态冲突导致模拟按键失效（例如出现只输入 v 的情况）
+        Win32.WaitForModifiersReleased(500);
+
         var lShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_LSHIFT) & 0x8000) != 0;
         var rShiftHeld = (Win32.GetAsyncKeyState(Win32.VK_RSHIFT) & 0x8000) != 0;
         var ctrlHeld = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
