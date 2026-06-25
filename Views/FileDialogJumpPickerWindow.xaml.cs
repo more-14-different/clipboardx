@@ -50,21 +50,12 @@ public partial class FileDialogJumpPickerWindow : Window
 
     /// <summary>
     /// 全局独立模式（Alt-G 无文件对话框时弹出）：不抢焦点（WS_EX_NOACTIVATE），
-    /// Enter/Click 写剪贴板并等原窗口重新前台后发 Ctrl+V；Ctrl+Enter/Ctrl+Click 仅复制。
+    /// 键盘钩子在 standaloneTargetHwnd 前台时生效，不因前台切换而关闭面板。
+    /// 交互逻辑复用 CommitNavigateKeepOpen：Enter/Click 打开文件夹，Ctrl+Enter/Ctrl+Click 粘贴路径。
     /// </summary>
     private readonly bool _isStandaloneMode;
-    /// <summary>全局独立模式触发时的前台 HWND（粘贴目标窗口）。</summary>
+    /// <summary>全局独立模式触发时的前台 HWND（键盘钩子 scope 判断用）。</summary>
     private readonly IntPtr _standaloneTargetHwnd;
-
-    /// <summary>等待目标窗口重新前台后发粘贴的 WinEvent 钩；只在全局独立模式下使用。</summary>
-    private IntPtr _standalonePasteWinEventHook;
-    /// <summary>超时保护 Timer：若目标窗口在 1500ms 内未重新前台则放弃粘贴。</summary>
-    private DispatcherTimer? _standalonePasteTimeoutTimer;
-    /// <summary>当前等待粘贴的会话 ID；递增用于过期检测。</summary>
-    private int _standalonePasteGen;
-
-    private static readonly Win32.WinEventDelegate s_standalonePasteWinEventThunk = StaticStandalonePasteWinEventProc;
-    private static FileDialogJumpPickerWindow? s_standalonePasteOwner;
 
     private IntPtr _jumpKeyboardHook;
     private bool _suppressJumpHook;
@@ -243,8 +234,6 @@ public partial class FileDialogJumpPickerWindow : Window
         _searchRefreshTimer = null;
         _deferredExternalRefreshTimer?.Stop();
         _deferredExternalRefreshTimer = null;
-        // 全局独立模式的粘贴等待键和超时保护。
-        CancelStandalonePasteWait();
         UninstallDockOwnerFollowHooks();
         UninstallKeyboardHook();
         UninstallJumpPickerOutsideHooks();
@@ -1164,7 +1153,7 @@ public partial class FileDialogJumpPickerWindow : Window
         var m = PanelModifierDisplayName(_settings.PanelModifierKey);
         if (_isStandaloneMode)
             FooterHintsText.Text =
-                $"Enter/Click 粘贴 · Ctrl+Enter/Ctrl+Click 仅复制 · ↑↓ · 字母 · Esc 取消";
+                $"Enter/Click 打开 · Ctrl+Enter/Ctrl+Click 粘贴路径 · ↑↓ · 字母 · Esc 取消";
         else
             FooterHintsText.Text =
                 $"{m}+1~9 跳转 · ↑↓ 选择 · ←→ 翻页 · Tab · 字母 everything · 右键收藏 · Esc 取消/清除";
@@ -2000,120 +1989,11 @@ public partial class FileDialogJumpPickerWindow : Window
 
     private void CommitSelection(string path, bool pasteText = false)
     {
-        if (_isStandaloneMode)
-        {
-            // 全局独立模式语义：
-            //   pasteText=false（正常 Enter/Click）→ 写剪贴板 + 等目标窗口前台后粘贴
-            //   pasteText=true（Ctrl+Enter/Ctrl+Click）→ 仅写剪贴板，面板保持打开
-            CommitGlobalStandalone(path, copyOnly: pasteText);
-            return;
-        }
-        // 选中即跳转，但跳转列表不自动关闭：由 Esc / 点击列表外 / 文件对话框关闭 等显式动作收起。
+        // 所有模式统一走 CommitNavigateKeepOpen：
+        //   pasteText=true（Ctrl+Enter/Ctrl+Click）→ 写剪贴板 + SendCtrlVPaste（复用主面板逻辑）
+        //   pasteText=false + dlgHwnd==0（全局模式）→ 打开文件夹
+        //   pasteText=false + dlgHwnd!=0（文件对话框模式）→ 导航到目标路径
         CommitNavigateKeepOpen(path, pasteText);
-    }
-
-    /// <summary>
-    /// 全局独立模式专用提交逻辑。
-    /// copyOnly=false：将路径写入剪贴板，隐藏面板，等目标窗口重新前台后发 Ctrl+V（超时 1500ms 放弃）。
-    /// copyOnly=true：仅将路径写入剪贴板，面板保持打开（用户可继续选择其他路径）。
-    /// </summary>
-    private void CommitGlobalStandalone(string path, bool copyOnly)
-    {
-        try { System.Windows.Clipboard.SetText(path); }
-        catch { Close(); return; }
-
-        if (copyOnly)
-        {
-            // 仅复制到剪贴板，面板保持打开以便用户继续选择其他路径。
-            return;
-        }
-
-        // 隐藏面板（与 Ctrl+Alt+V 面板的 Hide 语义对齐）
-        Hide();
-
-        // 事件驱动粘贴：等目标窗口重新前台后再发 Ctrl+V。
-        unchecked { _standalonePasteGen++; }
-        var gen = _standalonePasteGen;
-        var targetHwnd = _standaloneTargetHwnd;
-        var targetRoot = targetHwnd != IntPtr.Zero
-            ? Win32.GetAncestor(targetHwnd, Win32.GA_ROOT)
-            : IntPtr.Zero;
-
-        // 检查目标窗口是否已经是前台（弹出前看到的就是前台窗口）
-        var fgNow = Win32.GetForegroundWindow();
-        var fgRootNow = fgNow != IntPtr.Zero ? Win32.GetAncestor(fgNow, Win32.GA_ROOT) : IntPtr.Zero;
-        if (targetRoot != IntPtr.Zero && fgRootNow == targetRoot)
-        {
-            // 目标窗口已经是前台（比如用户点击了面板外的区域且目标未失焦），直接发送。
-            _suppressJumpHook = true;
-            Dispatcher.BeginInvoke(() =>
-            {
-                if (gen != _standalonePasteGen) return;
-                PopupWindow.SendCtrlVPaste();
-                Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
-            }, DispatcherPriority.Send);
-            return;
-        }
-
-        // 安装 WinEvent 乾撴等目标窗口重新成为前台。
-        s_standalonePasteOwner = this;
-        _standalonePasteWinEventHook = Win32.SetWinEventHook(
-            Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
-            IntPtr.Zero, s_standalonePasteWinEventThunk, 0, 0,
-            Win32.WINEVENT_OUTOFCONTEXT);
-
-        // 超时保护：1500ms 内未见目标窗口前台则放弃粘贴。
-        _standalonePasteTimeoutTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
-        _standalonePasteTimeoutTimer.Tick += (_, _) =>
-        {
-            if (gen != _standalonePasteGen) return;
-            CancelStandalonePasteWait();
-            ShellNavigateLog.Write("filejump", "StandalonePaste: timeout waiting for target foreground, giving up paste");
-            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
-        };
-        _standalonePasteTimeoutTimer.Start();
-    }
-
-    /// <summary>全局独立模式粘贴：取消等待目标窗口前台的 WinEvent + 超时保护。</summary>
-    private void CancelStandalonePasteWait()
-    {
-        if (_standalonePasteWinEventHook != IntPtr.Zero)
-        {
-            try { Win32.UnhookWinEvent(_standalonePasteWinEventHook); } catch { }
-            _standalonePasteWinEventHook = IntPtr.Zero;
-        }
-        if (s_standalonePasteOwner == this)
-            s_standalonePasteOwner = null;
-        _standalonePasteTimeoutTimer?.Stop();
-        _standalonePasteTimeoutTimer = null;
-    }
-
-    private static void StaticStandalonePasteWinEventProc(
-        IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
-        int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
-    {
-        var owner = s_standalonePasteOwner;
-        if (owner == null) return;
-        owner.OnStandalonePasteForegroundChanged(hwnd);
-    }
-
-    private void OnStandalonePasteForegroundChanged(IntPtr newFg)
-    {
-        if (_standaloneTargetHwnd == IntPtr.Zero) return;
-        var targetRoot = Win32.GetAncestor(_standaloneTargetHwnd, Win32.GA_ROOT);
-        var fgRoot = newFg != IntPtr.Zero ? Win32.GetAncestor(newFg, Win32.GA_ROOT) : IntPtr.Zero;
-        if (targetRoot == IntPtr.Zero || fgRoot != targetRoot) return;
-
-        // 目标窗口已重新成为前台，立即发粘贴。
-        var gen = _standalonePasteGen;
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (gen != _standalonePasteGen) return;
-            CancelStandalonePasteWait();
-            _suppressJumpHook = true;
-            PopupWindow.SendCtrlVPaste();
-            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
-        }, DispatcherPriority.Send);
     }
 
     /// <summary>
