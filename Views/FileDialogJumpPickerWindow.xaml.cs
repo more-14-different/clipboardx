@@ -630,7 +630,7 @@ public partial class FileDialogJumpPickerWindow : Window
             if (ShouldInterceptKey(kb.vkCode, kb.scanCode))
             {
                 Dispatcher.BeginInvoke(() => ApplyKeyDown(kb.vkCode, kb.scanCode),
-                    System.Windows.Threading.DispatcherPriority.Send);
+                    System.Windows.Threading.DispatcherPriority.Input);
                 return (IntPtr)1;
             }
         }
@@ -2120,20 +2120,40 @@ public partial class FileDialogJumpPickerWindow : Window
 
         if (pasteText)
         {
-            // 与主面板完全一致的极速粘贴流程（面板已设置为 WS_EX_NOACTIVATE 不抢焦点）
-            try { System.Windows.Clipboard.SetText(path); }
-            catch { Close(); return; }
-
             _suppressJumpHook = true;
 
-            // 隐藏面板
+            // 1. 隐藏面板，让 UI 立即恢复响应，消除鼠标沙漏卡顿
             Hide();
 
-            // 发送粘贴（目标窗口焦点一直没变，立即发送即可）
-            PopupWindow.SendCtrlVPaste();
+            // 2. 将易阻塞的剪贴板写入和粘贴转移到后台 STA 线程
+            var pasteThread = new System.Threading.Thread(() =>
+            {
+                bool ok = false;
+                for (int i = 0; i < 5; i++)
+                {
+                    try
+                    {
+                        System.Windows.Clipboard.SetText(path);
+                        ok = true;
+                        break;
+                    }
+                    catch { System.Threading.Thread.Sleep(40); }
+                }
 
-            // 异步关闭窗口
-            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
+                if (ok)
+                {
+                    PopupWindow.SendCtrlVPaste();
+                }
+
+                Dispatcher.BeginInvoke(new Action(Close), System.Windows.Threading.DispatcherPriority.Background);
+            })
+            {
+                IsBackground = true,
+                Name = "FileJumpStandalonePasteThread"
+            };
+            pasteThread.SetApartmentState(System.Threading.ApartmentState.STA);
+            pasteThread.Start();
+
             return;
         }
 
