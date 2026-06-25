@@ -764,8 +764,8 @@ public partial class FileDialogJumpPickerWindow : Window
                 int delta = 0;
                 if (vk == 0x4A) delta = 1;       // J
                 else if (vk == 0x4B) delta = -1; // K
-                else if (vk == 0x48) delta = -5; // H
-                else if (vk == 0x4C) delta = 5;  // L
+                else if (vk == 0x48) delta = -3; // H
+                else if (vk == 0x4C) delta = 3;  // L
 
                 MoveSelection(delta);
                 return true;

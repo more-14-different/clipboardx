@@ -191,8 +191,8 @@ public partial class PopupWindow : Window
             int delta = 0;
             if (vkCode == 0x4A) delta = 1;       // J
             else if (vkCode == 0x4B) delta = -1; // K
-            else if (vkCode == 0x48) delta = -5; // H
-            else if (vkCode == 0x4C) delta = 5;  // L
+            else if (vkCode == 0x48) delta = -3; // H
+            else if (vkCode == 0x4C) delta = 3;  // L
 
             if (shift)
                 MoveSelectionExtend(delta);
